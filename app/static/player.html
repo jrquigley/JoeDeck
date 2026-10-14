@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signage Player</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; cursor: none; }
+  * { cursor: none !important; }
+  #stage { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; overflow: hidden; background: #000; }
+  /* Rotation is done here, so the Pi's display config never has to change. */
+  body.portrait #stage          { width: 100vh; height: 100vw; transform-origin: top left; transform: rotate(90deg) translateY(-100%); }
+  body.portrait-flipped #stage  { width: 100vh; height: 100vw; transform-origin: top left; transform: rotate(-90deg) translateX(-100%); }
+  body.landscape-flipped #stage { transform: rotate(180deg); }
+
+  .layer { position: absolute; inset: 0; overflow: hidden; opacity: 0; will-change: opacity, transform;
+           transition-property: opacity, transform; transition-timing-function: ease-in-out; }
+  .layer.on { opacity: 1; transform: none; }
+  /* slide: new item comes in from the right, old one leaves to the left */
+  .slide .layer        { opacity: 1; transform: translateX(100%); }
+  .slide .layer.on     { transform: none; }
+  .slide .layer.out    { transform: translateX(-100%); }
+  .layer.instant       { transition: none !important; }
+
+  .layer img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .layer iframe { border: 0; position: absolute; top: 0; left: 0; transform-origin: top left; background: #fff; }
+
+  #empty { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column;
+           color: #ddd; font-family: "DejaVu Sans", system-ui, sans-serif; text-align: center; gap: 0.6em; }
+  #empty h1 { font-size: 4vmin; margin: 0; font-weight: 600; }
+  #empty p  { font-size: 2.6vmin; margin: 0; color: #9aa; }
+  #empty code { font-size: 3.4vmin; color: #fff; background: #222; padding: .2em .6em; border-radius: .3em; }
+</style>
+</head>
+<body class="landscape">
+<div id="stage">
+  <div class="layer" id="a"></div>
+  <div class="layer" id="b"></div>
+  <div id="empty">
+    <h1>JoeDeck is running</h1>
+    <p>Nothing to show yet. Add images or websites from any computer on this network:</p>
+    <div id="urls"></div>
+  </div>
+</div>
+<script src="/static/player.js"></script>
+</body>
+</html>

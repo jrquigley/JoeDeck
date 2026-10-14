@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JoeDeck</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #fff; --text: #1d2330; --muted: #6b7280; --line: #e3e6ea;
+    --accent: #2563eb; --accent-soft: #e8efff; --danger: #c62828; --ok: #1b873f; --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171c; --card: #1d2128; --text: #e7e9ee; --muted: #9aa3af; --line: #2e333c;
+            --accent: #5b8cff; --accent-soft: #23304d; --danger: #ef5350; --ok: #4caf50; }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  header { position: sticky; top: 0; z-index: 5; background: var(--card); border-bottom: 1px solid var(--line);
+           padding: 10px 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; }
+  header h1 { font-size: 18px; margin: 0; }
+  nav { display: flex; gap: 4px; flex-wrap: wrap; flex: 1; }
+  nav a { color: var(--muted); text-decoration: none; padding: 6px 12px; border-radius: 8px; font-weight: 500; }
+  nav a.on { background: var(--accent-soft); color: var(--accent); }
+  #who { color: var(--muted); font-size: 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; display: grid; gap: 18px; }
+  .view { display: grid; gap: 18px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
+  section h2 { margin: 0 0 4px; font-size: 17px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+  button, .btn { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 8px;
+           padding: 6px 12px; cursor: pointer; white-space: nowrap; text-decoration: none; display: inline-block; }
+  button:hover, .btn:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--danger); }
+  button.link { border: 0; background: none; color: var(--accent); padding: 0 4px; }
+  button.icon { padding: 4px 9px; }
+  button:disabled { opacity: .45; cursor: default; }
+  input, select { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; }
+  input[type=number] { width: 80px; }
+  label { display: inline-flex; align-items: center; gap: 6px; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin-bottom: 12px; }
+  .row > .lbl { width: 130px; color: var(--muted); font-size: 14px; }
+  .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; border-right: 1px solid var(--line); display: inline-flex; align-items: center; gap: 7px; }
+  .seg button:last-child { border-right: 0; }
+  .seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .screen { display: inline-block; border: 2px solid currentColor; border-radius: 2px; position: relative; }
+  .screen.l { width: 22px; height: 14px; } .screen.p { width: 14px; height: 22px; }
+  .screen::after { content: ""; position: absolute; width: 4px; height: 4px; background: currentColor; border-radius: 50%; }
+  .screen.up::after { top: 1px; left: 1px; } .screen.down::after { bottom: 1px; right: 1px; }
+  #drop { border: 2px dashed var(--line); border-radius: var(--radius); padding: 22px; text-align: center; color: var(--muted); margin-bottom: 14px; }
+  #drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  #progress { height: 4px; background: var(--accent); width: 0; transition: width .2s; border-radius: 2px; margin-top: 10px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+  .card { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; background: var(--card); }
+  .card img { width: 100%; aspect-ratio: 16/10; object-fit: cover; background: #000; display: block; }
+  .card .meta { padding: 6px 8px 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; }
+  .card .meta small { color: var(--muted); }
+  .webthumb { aspect-ratio: 16/10; background: linear-gradient(135deg, #1e3a8a, #0f766e); color: #fff; display: flex; flex-direction: column;
+              align-items: center; justify-content: center; gap: 6px; font-size: 12px; overflow: hidden; }
+  .webthumb span { max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .webthumb.sm { width: 72px; height: 45px; aspect-ratio: auto; border-radius: 4px; flex: none; }
+  .webthumb.sm svg { width: 20px; height: 20px; }
+  .card .acts { display: flex; gap: 4px; padding: 6px 8px 8px; flex-wrap: wrap; }
+  .card .acts button { font-size: 12px; padding: 3px 7px; }
+  .signs { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+  .sign { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--card); cursor: pointer; text-align: left; padding: 0; }
+  .sign:hover { border-color: var(--accent); }
+  .sign .pic { aspect-ratio: 16/9; background: #000; display: flex; align-items: center; justify-content: center; color: #888; font-size: 13px; }
+  .sign .pic img { width: 100%; height: 100%; object-fit: contain; }
+  .sign .body { padding: 10px 12px; display: grid; gap: 2px; }
+  .sign .body b { font-size: 16px; }
+  .sign .body span { color: var(--muted); font-size: 13px; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); margin-right: 5px; vertical-align: 1px; }
+  .dot.on { background: var(--ok); } .dot.off { background: var(--danger); }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .tabs button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .items { display: grid; gap: 6px; }
+  .item { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; flex-wrap: wrap; }
+  .item img { width: 72px; height: 45px; object-fit: cover; border-radius: 4px; background: #000; }
+  .item .n { flex: 1; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item .num { color: var(--muted); width: 22px; text-align: right; font-size: 13px; }
+  .empty { color: var(--muted); padding: 14px; text-align: center; border: 1px dashed var(--line); border-radius: 8px; }
+  .rule { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 8px; margin-bottom: 8px; }
+  .rule.off { opacity: .55; }
+  .chips label { font-size: 13px; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+  .chips input { display: none; }
+  .chips label:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .pill { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+  .spacer { flex: 1; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; font-size: 13px; border-bottom: 1px solid var(--line); padding: 6px 8px; }
+  td { border-bottom: 1px solid var(--line); padding: 7px 8px; vertical-align: top; }
+  td.t { white-space: nowrap; color: var(--muted); font-size: 13px; }
+  .tablewrap { overflow-x: auto; }
+  .crumb { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .crumb h2 { margin: 0; font-size: 20px; }
+  dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text); padding: 20px; width: min(440px, 92vw); }
+  dialog::backdrop { background: rgba(0,0,0,.4); }
+  dialog form { display: grid; gap: 12px; }
+  dialog h3 { margin: 0; }
+  dialog label { display: grid; gap: 4px; font-size: 14px; color: var(--muted); }
+  dialog .btns { display: flex; justify-content: flex-end; gap: 8px; }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #222; color: #fff; padding: 9px 16px;
+           border-radius: 8px; font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .25s; z-index: 10; max-width: 90vw; }
+  #toast.show { opacity: 1; } #toast.err { background: var(--danger); }
+  @media (max-width: 600px) { .row > .lbl { width: 100%; } header { padding: 10px 14px; } section { padding: 14px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>JoeDeck</h1>
+  <nav>
+    <a href="#/signs" data-view="signs">Signs</a>
+    <a href="#/activity" data-view="activity">Activity</a>
+    <a href="#/users" data-view="users" data-admin hidden>Users</a>
+    <a href="#/network" data-view="network" data-admin hidden>Network</a>
+  </nav>
+  <div id="who"><span id="whoName"></span><button class="link" id="btnMyPw">Change password</button><button class="link" id="btnLogout">Log out</button></div>
+</header>
+<div id="updBanner" hidden style="background:var(--accent-soft);color:var(--accent);padding:8px 20px;font-size:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+  <span id="updBannerText"></span><a href="#/network" class="btn" style="padding:3px 10px">See updates</a>
+</div>
+
+<main>
+  <!-- ======================================================= all signs -->
+  <div class="view" id="v-signs" hidden>
+    <section>
+      <h2>Signs</h2>
+      <p class="hint">Every JoeDeck device on your network. Click one to manage it. You can log in on any of them; they all show the same list.</p>
+      <div class="signs" id="signList"></div>
+    </section>
+  </div>
+
+  <!-- ======================================================= one sign -->
+  <div class="view" id="v-device" hidden>
+    <section>
+      <div class="crumb">
+        <a class="btn" href="#/signs">← All signs</a>
+        <h2 id="devName"></h2>
+        <span id="devStatus" class="hint" style="margin:0"></span>
+        <span class="spacer"></span>
+        <button id="btnReload" title="Make the screen reload the player page">Refresh screen</button>
+        <a class="btn" id="btnPreview" target="_blank">Preview</a>
+      </div>
+      <p class="hint" id="nowLine" style="margin:10px 0 0"></p>
+    </section>
+
+    <section>
+      <h2>Display</h2>
+      <p class="hint">Changes apply to the screen within about 5 seconds.</p>
+      <div class="row"><span class="lbl">What to show</span>
+        <div class="seg" id="mode">
+          <button data-v="playlist">Slideshow / schedule</button>
+          <button data-v="single">One item, always</button>
+        </div>
+        <select id="singleMedia"></select>
+      </div>
+      <div class="row"><span class="lbl">Orientation</span>
+        <div class="seg" id="orientation">
+          <button data-v="landscape"><span class="screen l up"></span>Horizontal</button>
+          <button data-v="portrait"><span class="screen p up"></span>Vertical</button>
+          <button data-v="landscape-flipped"><span class="screen l down"></span>Horizontal (upside-down)</button>
+          <button data-v="portrait-flipped"><span class="screen p down"></span>Vertical (other way)</button>
+        </div>
+      </div>
+      <div class="row"><span class="lbl">Image fit</span>
+        <div class="seg" id="fit">
+          <button data-v="contain">Fit whole image</button>
+          <button data-v="cover">Fill screen (crop edges)</button>
+        </div>
+      </div>
+      <div class="row"><span class="lbl">Transition</span>
+        <div class="seg" id="transitionStyle">
+          <button data-v="fade">Fade</button>
+          <button data-v="slide">Slide</button>
+          <button data-v="none">Instant</button>
+        </div>
+        <label>speed <input type="number" id="transition" min="0" max="5000" step="100"> ms</label>
+      </div>
+      <div class="row"><span class="lbl">Other</span>
+        <span class="lbl" style="width:auto">Background</span><input type="color" id="background">
+        <span class="lbl" style="width:auto">Default duration</span>
+        <label><input type="number" id="defaultDuration" min="1" step="1"> s</label>
+      </div>
+    </section>
+
+    <section>
+      <h2>Media library</h2>
+      <p class="hint">Images (JPG, PNG, GIF, WebP – large photos are resized and turned upright automatically) and websites (menus, schedules, dashboards, calendars…).</p>
+      <div id="drop">
+        Drag images here, or <button id="btnPick" class="primary">Choose files…</button> <button id="btnAddWeb">+ Add website</button>
+        <label style="margin-left:12px"><input type="checkbox" id="addToPl" checked> also add to playlist “<span id="addToPlName"></span>”</label>
+        <input type="file" id="file" multiple accept="image/*" hidden>
+        <div id="progress"></div>
+      </div>
+      <div class="grid" id="library"></div>
+    </section>
+
+    <section>
+      <h2>Playlists</h2>
+      <p class="hint">A playlist is a slideshow of images and websites. Set how long each item stays up. A playlist with a single item shows it indefinitely.
+        The <span class="pill">default</span> playlist plays whenever no schedule rule is active.</p>
+      <div class="tabs" id="plTabs"></div>
+      <div class="row">
+        <button id="plNew">+ New playlist</button>
+        <button id="plRename">Rename</button>
+        <button id="plDefault">Make default</button>
+        <button id="plDelete" class="danger">Delete</button>
+        <label title="Play the items in a random order each time through"><input type="checkbox" id="plShuffle"> Shuffle</label>
+        <span class="spacer"></span>
+        <label>Set all to <input type="number" id="allDur" min="1" value="10"> s</label><button id="plAllDur">Apply</button>
+      </div>
+      <div class="items" id="plItems"></div>
+      <p class="hint" id="plTotal" style="margin-top:10px"></p>
+    </section>
+
+    <section>
+      <h2>Schedule</h2>
+      <p class="hint">Rules switch to a different playlist on certain days and times. Rules are checked top to bottom; the first one that matches wins.
+        A window like 22:00 → 06:00 runs overnight; 00:00 → 00:00 means all day. Uses this sign’s clock (<span id="clock"></span>).</p>
+      <div id="rules"></div>
+      <div class="row">
+        <button id="ruleAdd">+ Add rule</button>
+        <span class="spacer"></span>
+        <span id="ruleDirty" class="hint" style="margin:0"></span>
+        <button id="ruleSave" class="primary">Save schedule</button>
+      </div>
+    </section>
+
+    <section data-admin hidden id="wifiSection">
+      <div class="row" style="margin:0 0 4px"><h2 style="margin:0">Wi-Fi</h2><span class="spacer"></span><button id="wifiRefresh">Refresh</button></div>
+      <p class="hint" id="wifiStatus">Loading…</p>
+      <div class="items" id="wifiSaved"></div>
+      <div class="row" style="margin-top:14px">
+        <span class="lbl">Add a network</span>
+        <input id="wifiSsid" list="wifiScanList" placeholder="Network name" autocomplete="off">
+        <datalist id="wifiScanList"></datalist>
+        <input id="wifiPw" type="password" placeholder="Password" autocomplete="new-password">
+        <label><input type="checkbox" id="wifiHidden"> hidden</label>
+        <label><input type="checkbox" id="wifiConnect"> switch to it now</label>
+        <button id="wifiAdd" class="primary">Save</button>
+        <button id="wifiScan" class="link">Scan for networks</button>
+      </div>
+      <p class="hint" style="margin:0">Saved networks are used automatically when in range. “Switch now” goes back to the current network if the new one fails. If it works, the sign may get a new address on that network.</p>
+    </section>
+
+    <section>
+      <h2>This sign</h2>
+      <div class="row"><span class="lbl">Device</span><span id="devInfo" class="hint" style="margin:0"></span></div>
+      <div class="row" data-admin hidden>
+        <span class="lbl">Admin</span>
+        <button id="btnRenameSign">Rename sign</button>
+        <button id="btnUpdateSign" hidden>Update software</button>
+        <button id="btnReboot" class="danger">Reboot</button>
+        <button id="btnRemoveSign" class="danger">Remove from network</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- ======================================================= activity -->
+  <div class="view" id="v-activity" hidden>
+    <section>
+      <h2>Activity log</h2>
+      <p class="hint">Who changed what, and when, across all the signs you can access. Each sign keeps its own history (newest 5,000 events), so signs that are switched off can't show theirs until they're back.</p>
+      <div class="row">
+        <select id="logDev"><option value="">All signs</option></select>
+        <select id="logUser"><option value="">All users</option></select>
+        <input id="logText" placeholder="Search…" style="flex:1;min-width:140px">
+        <button id="logRefresh">Refresh</button>
+      </div>
+      <p class="hint" id="logNote"></p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>When</th><th>Sign</th><th>User</th><th>What</th><th>Details</th></tr></thead>
+        <tbody id="logRows"></tbody>
+      </table></div>
+    </section>
+  </div>
+
+  <!-- ======================================================= users -->
+  <div class="view" id="v-users" hidden>
+    <section>
+      <div class="row" style="margin:0 0 4px"><h2 style="margin:0">Users</h2><span class="spacer"></span><button id="userAdd" class="primary">+ Add user</button></div>
+      <p class="hint"><b>Admins</b> manage every sign, users and the network. <b>Editors</b> manage content only on the signs you pick. Users are shared by all signs, so a user can log in on any of them.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>User</th><th>Role</th><th>Can manage</th><th></th></tr></thead>
+        <tbody id="userRows"></tbody>
+      </table></div>
+    </section>
+  </div>
+
+  <!-- ======================================================= network -->
+  <div class="view" id="v-network" hidden>
+    <section>
+      <h2>Signs in your network</h2>
+      <p class="hint">These Pis share users and trust each other. A sign shows as offline if nothing has been heard from it for about 30 seconds.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Sign</th><th>Address</th><th>Status</th><th>Version</th><th></th></tr></thead>
+        <tbody id="memberRows"></tbody>
+      </table></div>
+    </section>
+    <section>
+      <div class="row" style="margin:0 0 4px"><h2 style="margin:0">Software updates</h2><span class="spacer"></span>
+        <button id="updCheck">Check now</button><button id="updAll" class="primary" hidden>Update all signs</button></div>
+      <p class="hint" id="updInfo">Checking…</p>
+    </section>
+    <section>
+      <h2>Wi-Fi for all signs</h2>
+      <p class="hint">Saves a Wi-Fi network on every online sign at once – handy before moving signs or when a Wi-Fi password changes. Signs keep their current connection; they use this network when it's in range (or when the current one stops working).</p>
+      <div class="row" style="margin:0">
+        <input id="allWifiSsid" placeholder="Network name">
+        <input id="allWifiPw" type="password" placeholder="Password" autocomplete="new-password">
+        <label><input type="checkbox" id="allWifiHidden"> hidden</label>
+        <button id="allWifiSave" class="primary">Save on all signs</button>
+      </div>
+      <p class="hint" id="allWifiResult" style="margin:8px 0 0"></p>
+    </section>
+    <section>
+      <h2>Found on your network</h2>
+      <p class="hint">JoeDeck devices that aren't part of your network yet. Adding one needs the admin username and password that were set when <i>that</i> Pi was installed. After it joins, it uses this network's users.</p>
+      <div id="foundList"></div>
+      <div class="row" style="margin-top:14px">
+        <span class="hint" style="margin:0">Not showing up? Some routers block discovery. Add it by address:</span>
+        <input id="probeIp" placeholder="192.168.1.50 or name.local">
+        <button id="probeBtn">Look for it</button>
+      </div>
+    </section>
+  </div>
+</main>
+
+<!-- ======================================================= dialogs -->
+<dialog id="dlgUser"><form method="dialog" id="userForm">
+  <h3 id="userFormTitle">Add user</h3>
+  <label>Username <input id="uf_name" autocapitalize="none" autocomplete="off"></label>
+  <label><span id="uf_pwLabel">Password</span> <input id="uf_pw" type="password" autocomplete="new-password"></label>
+  <label>Role <select id="uf_role"><option value="editor">Editor – only selected signs</option><option value="admin">Admin – everything</option></select></label>
+  <div id="uf_devWrap"><div class="hint" style="margin:0 0 6px">Signs this user can manage</div><div class="row chips" id="uf_devs" style="margin:0"></div></div>
+  <div class="btns"><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Save</button></div>
+</form></dialog>
+
+<dialog id="dlgAdopt"><form method="dialog" id="adoptForm">
+  <h3>Add “<span id="adoptName"></span>”</h3>
+  <p class="hint" style="margin:0">Enter an admin login <b>from that Pi</b> (the password chosen when it was installed).</p>
+  <label>Username <input id="ad_user" value="admin" autocapitalize="none"></label>
+  <label>Password <input id="ad_pw" type="password" autocomplete="off"></label>
+  <div class="btns"><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Add sign</button></div>
+</form></dialog>
+
+<dialog id="dlgWeb"><form method="dialog">
+  <h3 id="webTitle">Add website</h3>
+  <label>Web address <input id="web_url" placeholder="https://example.com/menu" autocomplete="off"></label>
+  <label>Name <input id="web_name" placeholder="(optional)"></label>
+  <div class="row" style="margin:0">
+    <label style="display:inline-flex">Zoom <input type="number" id="web_zoom" min="25" max="400" step="5" value="100"> %</label>
+    <label style="display:inline-flex">Reload every <input type="number" id="web_refresh" min="0" max="1440" value="0"> min</label>
+  </div>
+  <p class="hint" style="margin:0">Zoom makes text bigger for TVs (150–200% is common). “Reload every” keeps a page fresh while it stays on screen (0 = reload only each time it comes up). Pages that need a login, or that show cookie pop-ups, may not look right.</p>
+  <label id="web_addWrap" style="display:inline-flex"><input type="checkbox" id="web_add" checked> also add to playlist “<span id="web_plName"></span>”</label>
+  <div class="btns"><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Save</button></div>
+</form></dialog>
+
+<dialog id="dlgPw"><form method="dialog" id="pwForm">
+  <h3>Change your password</h3>
+  <label>Current password <input id="pw_cur" type="password" autocomplete="current-password"></label>
+  <label>New password <input id="pw_new" type="password" autocomplete="new-password"></label>
+  <div class="btns"><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Change</button></div>
+</form></dialog>
+
+<footer style="text-align:center;color:var(--muted);font-size:12px;padding:0 16px 24px">JoeDeck <span id="appVersion"></span> · © 2026 Joe Quigley, Big-N-Tasty Designs</footer>
+<div id="toast"></div>
+<script src="/static/admin.js"></script>
+</body>
+</html>

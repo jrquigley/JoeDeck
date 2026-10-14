@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JoeDeck – Log in</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --text:#1d2330; --muted:#6b7280; --line:#e3e6ea; --accent:#2563eb; --danger:#c62828; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171c; --card:#1d2128; --text:#e7e9ee; --muted:#9aa3af; --line:#2e333c; --accent:#5b8cff; --danger:#ef5350; } }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:16px;
+         font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  form { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:28px; width:100%; max-width:340px; display:grid; gap:14px; }
+  h1 { margin:0; font-size:20px; } p { margin:0; color:var(--muted); font-size:14px; }
+  label { display:grid; gap:4px; font-size:14px; color:var(--muted); }
+  input { font:inherit; color:var(--text); background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+  button { font:inherit; border:0; border-radius:8px; padding:9px; background:var(--accent); color:#fff; cursor:pointer; }
+  #err { color:var(--danger); font-size:14px; min-height:1em; }
+</style>
+</head>
+<body>
+<form id="f">
+  <h1>JoeDeck</h1>
+  <p id="sub">Log in to manage your signs.</p>
+  <label>Username <input id="u" autocomplete="username" autocapitalize="none" required></label>
+  <label>Password <input id="p" type="password" autocomplete="current-password" required></label>
+  <button>Log in</button>
+  <div id="err"></div>
+  <p style="font-size:12px;text-align:center">© 2026 Joe Quigley, Big-N-Tasty Designs</p>
+</form>
+<script>
+  fetch('/cluster/hello').then(r => r.json()).then(h => { document.getElementById('sub').textContent = `Log in to manage your signs (this one is “${h.name}”).`; }).catch(() => {});
+  document.getElementById('f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = document.getElementById('err'); err.textContent = '';
+    const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: document.getElementById('u').value, password: document.getElementById('p').value }) });
+    if (r.ok) location.href = '/admin';
+    else err.textContent = (await r.json().catch(() => ({}))).error || 'Login failed';
+  });
+</script>
+</body>
+</html>

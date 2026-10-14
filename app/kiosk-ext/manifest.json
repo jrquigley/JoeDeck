@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "JoeDeck website helper",
+  "description": "Lets websites added to JoeDeck display inside the slideshow (removes 'no embedding' headers for embedded frames only).",
+  "version": "1.0",
+  "permissions": ["declarativeNetRequest"],
+  "host_permissions": ["<all_urls>"],
+  "declarative_net_request": {
+    "rule_resources": [{ "id": "allow_framing", "enabled": true, "path": "rules.json" }]
+  }
+}

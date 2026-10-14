@@ -1,0 +1,32 @@
+[Unit]
+Description=JoeDeck display (cage + Chromium kiosk on tty1)
+After=systemd-user-sessions.service plymouth-quit-wait.service signage-web.service
+After=dbus.socket systemd-logind.service getty@tty1.service
+Wants=dbus.socket systemd-logind.service signage-web.service
+Conflicts=getty@tty1.service
+ConditionPathExists=/dev/tty1
+
+[Service]
+Type=simple
+User=@USER@
+Environment=SIGNAGE_PORT=@PORT@
+# invisible mouse pointer (theme created by the installer)
+Environment=XCURSOR_THEME=signage-blank
+Environment=XCURSOR_SIZE=24
+Environment=XCURSOR_PATH=@HOME@/.icons:/usr/share/icons
+ExecStart=/usr/bin/cage -d -- /opt/signage/kiosk.sh
+Restart=always
+RestartSec=3
+PAMName=signage-kiosk
+UtmpIdentifier=tty1
+UtmpMode=user
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical.target
