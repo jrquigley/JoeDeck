@@ -75,6 +75,7 @@ DEFAULT_CONFIG = {
         "transition_ms": 800,
         "transition_style": "fade",  # fade | slide | none
         "default_duration": 10,
+        "show_wifi_ip": False,       # small "Wi-Fi 192.168.x.x" label in the corner of the screen
     },
     # the media library itself is shared by all signs (medialib.py); playlists refer to it by id
     "playlists": [{"id": "main", "name": "Main", "items": [], "shuffle": False}],  # items: [{media, duration}]
@@ -309,6 +310,19 @@ def sign_now(cfg=None):
 
 # =========================================================================== helpers
 
+def wifi_ip():
+    """This Pi's local address on Wi-Fi (wlan0 etc.), or "" when Wi-Fi isn't connected."""
+    try:
+        out = subprocess.run(["ip", "-4", "-o", "addr", "show"], capture_output=True, text=True, timeout=2).stdout
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) > 3 and parts[1].startswith("wl") and parts[2] == "inet":
+                return parts[3].split("/")[0]
+    except Exception:
+        pass
+    return ""
+
+
 def ip_addresses():
     try:
         out = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=2).stdout
@@ -420,11 +434,12 @@ def api_now():
     cfg = load_config()
     now = sign_now(cfg)
     settings = {k: cfg["settings"][k] for k in ("orientation", "fit", "background", "transition_ms",
-                                                 "transition_style")}
+                                                 "transition_style", "show_wifi_ip")}
     version = hashlib.sha1(json.dumps([settings, now], sort_keys=True).encode()).hexdigest()[:12]
     return jsonify({"version": version, "reload_token": cfg["reload_token"], "settings": settings, "now": now,
                     "info": {"name": cluster.my_name(), "hostname": os.uname().nodename,
-                             "ips": ip_addresses(), "port": str(cluster.port)}})
+                             "ips": ip_addresses(), "port": str(cluster.port)},
+                    "wifi_ip": wifi_ip() if cfg["settings"].get("show_wifi_ip") else None})
 
 
 # =========================================================================== login / account
@@ -1136,6 +1151,8 @@ def c_settings(t):
             s["transition_style"] = body["transition_style"]
         if "transition_ms" in body:
             s["transition_ms"] = max(0, min(5000, int(body["transition_ms"])))
+        if "show_wifi_ip" in body:
+            s["show_wifi_ip"] = bool(body["show_wifi_ip"])
         if "default_duration" in body:
             s["default_duration"] = max(1, min(86400, float(body["default_duration"])))
         if s.get("mode") == "single" and not s.get("single_media"):

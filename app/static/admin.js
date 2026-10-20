@@ -213,6 +213,7 @@
     if (document.activeElement !== $('transition')) $('transition').value = s.transition_ms;
     if (document.activeElement !== $('defaultDuration')) $('defaultDuration').value = s.default_duration;
     $('background').value = s.background || '#000000';
+    $('showWifiIp').checked = !!s.show_wifi_ip;
   }
 
   function renderLibrary() {
@@ -310,6 +311,7 @@
   $('transition').addEventListener('change', (e) => saveSettings({ transition_ms: Number(e.target.value) }));
   $('defaultDuration').addEventListener('change', (e) => saveSettings({ default_duration: Number(e.target.value) }));
   $('background').addEventListener('change', (e) => saveSettings({ background: e.target.value }));
+  $('showWifiIp').addEventListener('change', (e) => saveSettings({ show_wifi_ip: e.target.checked }));
   $('btnReload').addEventListener('click', () => {
     if (MODE === 'group') {   // refresh every screen in the group
       const ids = (S.group.members || []).filter((m) => devInfo(m).online);

@@ -34,6 +34,16 @@
     for (const img of stage.querySelectorAll('.layer img')) img.style.objectFit = s.fit === 'cover' ? 'cover' : 'contain';
   }
 
+  // Optional corner label with this sign's Wi-Fi address (updated on every check, so it follows network changes).
+  function showWifi(on, ip) {
+    const el = document.getElementById('wifiip');
+    if (!el) return;
+    el.style.display = on ? 'block' : 'none';
+    if (!on) return;
+    el.textContent = ip ? 'Wi-Fi ' + ip : 'Wi-Fi not connected';
+    el.classList.toggle('off', !ip);
+  }
+
   function showEmpty(info) {
     for (const l of layers) { l.classList.remove('on', 'out'); l.innerHTML = ''; }
     const port = info.port && info.port !== '80' ? ':' + info.port : '';
@@ -199,6 +209,7 @@
         const d = await r.json();
         if (reloadToken !== null && d.reload_token !== reloadToken) { location.reload(); return; }
         reloadToken = d.reload_token;
+        showWifi(d.settings && d.settings.show_wifi_ip, d.wifi_ip);
         if (d.version !== version) {
           version = d.version;
           applySettings(d.settings);

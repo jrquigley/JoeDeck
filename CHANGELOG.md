@@ -1,5 +1,8 @@
 # Changelog
 
+## 3.1.2
+- Optional label in the corner of the screen showing the sign's Wi-Fi address (Display → Other → "Show Wi-Fi address on screen")
+
 ## 3.1.1
 - Fix: black screen on Raspberry Pi OS Trixie when no keyboard/mouse is plugged in (display now starts without input devices)
 - Wi-Fi power saving turned off so signs stay reachable over Wi-Fi

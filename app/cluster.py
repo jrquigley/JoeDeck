@@ -26,7 +26,7 @@ import uuid
 
 import store
 
-VERSION = "3.1.1"
+VERSION = "3.1.2"
 # kinds of shared records: users, member signs, the shared media library, sign groups
 KINDS = ("users", "devices", "media", "groups")
 DISCOVERY_PORT = int(os.environ.get("SIGNAGE_DISCOVERY_PORT", "47474"))

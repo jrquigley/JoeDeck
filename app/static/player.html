@@ -29,6 +29,10 @@
            color: #ddd; font-family: "DejaVu Sans", system-ui, sans-serif; text-align: center; gap: 0.6em; }
   #empty h1 { font-size: 4vmin; margin: 0; font-weight: 600; }
   #empty p  { font-size: 2.6vmin; margin: 0; color: #9aa; }
+  #wifiip { position: absolute; right: 1.2vmin; bottom: 1.2vmin; z-index: 50; display: none;
+            font: 600 2.2vmin "DejaVu Sans", system-ui, sans-serif; color: #fff; background: rgba(0,0,0,.6);
+            padding: .25em .6em; border-radius: .4em; letter-spacing: .02em; }
+  #wifiip.off { color: #ffb4a8; }
   #empty code { font-size: 3.4vmin; color: #fff; background: #222; padding: .2em .6em; border-radius: .3em; }
 </style>
 </head>
@@ -36,6 +40,7 @@
 <div id="stage">
   <div class="layer" id="a"></div>
   <div class="layer" id="b"></div>
+  <div id="wifiip"></div>
   <div id="empty">
     <h1>JoeDeck is running</h1>
     <p>Nothing to show yet. Add images or websites from any computer on this network:</p>
