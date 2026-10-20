@@ -150,6 +150,9 @@ done
 chown -R "$RUN_USER:$RUN_USER" "$USER_HOME/.icons" "$USER_HOME/.local"
 
 # --------------------------------------------------------------- Wi-Fi
+# Pi Wi-Fi power saving makes signs stop answering on the network; turn it off for every connection
+mkdir -p /etc/NetworkManager/conf.d
+printf '[connection]\nwifi.powersave = 2\n' > /etc/NetworkManager/conf.d/joedeck-wifi-powersave.conf
 if [ -n "$WIFI_SSID" ]; then
   say "Saving Wi-Fi network \"$WIFI_SSID\""
   RES="$(S="$WIFI_SSID" P="$WIFI_PW" python3 -c 'import json,os;print(json.dumps({"cmd":"add","ssid":os.environ["S"],"password":os.environ["P"],"priority":20}))' | "$APP/wifi_helper.py")"

@@ -8,6 +8,8 @@ Turn Raspberry Pis into digital signs you manage from any browser. Each sign boo
 - **Slideshows.** Set a display time for each item, choose fade, slide or instant transitions, and shuffle if you like. You can also show one item indefinitely.
 - **Playlists + schedule.** Different playlists by day and time (e.g. *Breakfast menu Mon–Fri 06:00–11:00*), including overnight windows and date ranges.
 - **Horizontal or vertical** screens, switchable from the web page.
+- **One shared media library.** Upload once on any sign and use it on every sign. Each sign keeps its own copy, so it keeps playing if the network drops.
+- **Groups in sync.** Put signs in a group (e.g. *Concourse*) and they show the same playlist, schedule or single item, changing images at the same moment.
 - **Many signs, no central server.** Signs discover each other automatically. Everything is managed from one page, and the other signs keep running if one goes offline.
 - **Users and permissions.** *Admins* manage everything. *Editors* manage only the signs you assign them.
 - **Activity log.** See who changed what, and when, across all signs.
@@ -66,6 +68,7 @@ curl -fsSL https://github.com/jrquigley/JoeDeck/releases/latest/download/joedeck
   - **Playlists:** order, per-item time, shuffle, and which playlist is the default.
   - **Schedule:** switch playlists by day and time.
   - **Wi-Fi** (admins): see the connection, save networks, switch networks. A failed switch goes back to the old network automatically.
+- **Groups:** make a group, tick its signs, then **Edit content** to build its playlists and schedule (or start from a copy of a sign's). Every sign in the group shows that content in lockstep. **Restart together** starts the loop from the top on all of them. Turn a group off, or take a sign out, and the sign goes back to its own content. A sign is in at most one group, and screen settings (orientation, fit, transitions) stay with each sign.
 - **Activity:** the combined change log of all your signs.
 - **Users** (admins): add admins and editors, and choose which signs each editor can manage.
 - **Network** (admins):
@@ -79,6 +82,19 @@ curl -fsSL https://github.com/jrquigley/JoeDeck/releases/latest/download/joedeck
 - Sites that block being embedded are handled automatically on the signs. The admin page's *Preview* in your own browser may show those as blank, which is normal.
 - Pages behind a login, or with cookie banners or pop-ups, may not look right. Pages built for TVs or kiosks work best.
 - Websites need more memory than images. A Pi 3 or newer with 1 GB or more is recommended.
+
+### Shared media library: good to know
+
+- Everything you upload or add appears on every sign's library within seconds. Each sign copies the images in the background, and a card shows *copying…* until the copy has arrived.
+- Deleting an item removes it from **every** sign and playlist. Only admins, or the person who added an item, can rename or delete it.
+- Every sign stores every image (they're resized to at most 1920 px, usually well under 1 MB), so a 16 GB card holds thousands.
+
+### Groups and lockstep: good to know
+
+- Signs in a group work out what to show from their clocks, which stay in step through internet time sync, so they normally switch within a few hundredths of a second of each other. Each sign loads the next item a few seconds early, so the switch itself is instant.
+- A sign that restarts or joins late jumps straight to the right item.
+- Shuffle in a group uses the same "random" order on every sign.
+- Scheduled playlist changes happen together, right as the minute ticks over.
 
 ## Updates
 

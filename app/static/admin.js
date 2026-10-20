@@ -37,6 +37,8 @@
   const isAdmin = () => ME && ME.role === 'admin';
   const prefix = (id) => (id === ME.node.id ? '' : `/d/${id}`);
   const base = () => prefix(DEV);
+  let MODE = 'sign', GID = null, GROUPS = [];   // the content editor works on a sign or on a group
+  const cbase = () => (MODE === 'group' ? `/api/groups/${GID}` : `${prefix(DEV)}/api`);
   const devInfo = (id) => (NET.devices.find((d) => d.id === id) || { id, name: id, online: false });
   const fmtTime = (ts) => new Date(ts * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
   const ago = (ts) => {
@@ -69,14 +71,17 @@
   // ================================================================ routing
   async function route() {
     const [view, id] = location.hash.replace(/^#\/?/, '').split('/');
-    const v = ['signs', 'sign', 'activity', 'users', 'network'].includes(view) ? view : 'signs';
+    const v = ['signs', 'sign', 'groups', 'group', 'activity', 'users', 'network'].includes(view) ? view : 'signs';
     document.querySelectorAll('.view').forEach((el) => (el.hidden = true));
-    document.querySelectorAll('nav a').forEach((a) => a.classList.toggle('on', a.dataset.view === (v === 'sign' ? 'signs' : v)));
+    const navv = v === 'sign' ? 'signs' : v === 'group' ? 'groups' : v;
+    document.querySelectorAll('nav a').forEach((a) => a.classList.toggle('on', a.dataset.view === navv));
     try {
       await loadNet();
       if (firstRoute && v === 'signs' && NET.devices.length === 1) { firstRoute = false; location.hash = `#/sign/${NET.devices[0].id}`; return; }
       firstRoute = false;
       if (v === 'sign' && id) await showDevice(id);
+      else if (v === 'group' && id) await showGroup(id);
+      else if (v === 'groups') await showGroups();
       else if (v === 'activity') await showActivity();
       else if (v === 'users' && isAdmin()) await showUsers();
       else if (v === 'network' && isAdmin()) await showNetwork();
@@ -117,8 +122,16 @@
   });
 
   // ================================================================ one sign
+  function setMode(mode) {
+    MODE = mode;
+    $('v-device').classList.toggle('group-mode', mode === 'group');
+    $('btnBack').textContent = mode === 'group' ? '← All groups' : '← All signs';
+    $('btnBack').href = mode === 'group' ? '#/groups' : '#/signs';
+  }
+
   async function showDevice(id) {
-    if (DEV !== id) { curPl = null; rulesDirty = false; }
+    if (DEV !== id || MODE !== 'sign') { curPl = null; rulesDirty = false; }
+    setMode('sign');
     DEV = id;
     const d = devInfo(id);
     $('v-device').hidden = false;
@@ -131,8 +144,21 @@
     if (isAdmin()) loadWifi();
   }
 
+  async function showGroup(gid) {
+    if (GID !== gid || MODE !== 'group') { curPl = null; rulesDirty = false; }
+    setMode('group');
+    GID = gid;
+    DEV = ME.node.id;       // uploads and thumbnails go through this sign (the library is shared anyway)
+    $('v-device').hidden = false;
+    await refreshDevice();
+    const gr = S.group;
+    $('devName').textContent = `Group: ${gr.name}`;
+    const names = gr.members.map((m) => devInfo(m).name);
+    $('devStatus').innerHTML = `${gr.enabled ? '' : '<span class="pill">off</span> '}${names.length} sign${names.length === 1 ? '' : 's'}: ${esc(names.join(', ') || 'none yet')}`;
+  }
+
   async function refreshDevice() {
-    S = await api('GET', base() + '/api/state');
+    S = await api('GET', cbase() + '/state');
     if (!S.playlists.some((p) => p.id === curPl)) curPl = S.default_playlist;
     if (!rulesDirty) rules = structuredClone(S.schedules);
     renderDevice();
@@ -161,7 +187,13 @@
     const n = S.now;
     $('nowLine').innerHTML = `Now showing: <b>${esc(n.playlist_name)}</b> · ${esc(n.source)} · ${n.items.length} item${n.items.length === 1 ? '' : 's'}`;
     $('clock').textContent = S.server_time;
-    $('devInfo').textContent = `${S.device.hostname} · ${S.device.ips.join(', ')} · clock ${S.server_time}`;
+    if (S.device) $('devInfo').textContent = `${S.device.hostname} · ${S.device.ips.join(', ')} · clock ${S.server_time}`;
+    const inGroup = MODE === 'sign' && S.group;
+    $('groupNotice').hidden = !inGroup;
+    if (inGroup) {
+      $('groupNoticeText').innerHTML = `This sign is in the group <b>${esc(S.group.name)}</b>, so it shows the group's content, in sync with the other signs in it. The content below is its own and is used again if it leaves the group.`;
+      $('groupNoticeLink').href = `#/group/${S.group.id}`;
+    }
   }
 
   function setSeg(id, value) {
@@ -180,7 +212,7 @@
     sel.style.display = s.mode === 'single' ? '' : 'none';
     if (document.activeElement !== $('transition')) $('transition').value = s.transition_ms;
     if (document.activeElement !== $('defaultDuration')) $('defaultDuration').value = s.default_duration;
-    $('background').value = s.background;
+    $('background').value = s.background || '#000000';
   }
 
   function renderLibrary() {
@@ -190,15 +222,16 @@
     if (!S.media.length) { lib.innerHTML = '<div class="empty" style="grid-column:1/-1">Nothing here yet. Upload images or add a website.</div>'; return; }
     const counts = {};
     for (const p of S.playlists) for (const id of new Set(p.items.map((it) => it.media))) counts[id] = (counts[id] || 0) + 1;
+    const mine = (m) => isAdmin() || m.uploader === ME.username;   // who may rename/delete shared items
     lib.innerHTML = S.media.slice().reverse().map((m) => `
       <div class="card" data-id="${m.id}">
         ${thumbHtml(m)}
-        <div class="meta" title="${m.type === 'web' ? 'Click to edit' : 'Click to rename'}">${esc(m.name)}<br><small>${m.type === 'web' ? `website · ${m.zoom}%` : `${m.width}×${m.height}`}${counts[m.id] ? ` · in ${counts[m.id]} playlist${counts[m.id] > 1 ? 's' : ''}` : ''}</small></div>
+        <div class="meta" title="${mine(m) ? (m.type === 'web' ? 'Click to edit' : 'Click to rename') : ''}">${esc(m.name)}<br><small>${m.type === 'web' ? `website · ${m.zoom}%` : `${m.width}×${m.height}`}${counts[m.id] ? ` · in ${counts[m.id]} playlist${counts[m.id] > 1 ? 's' : ''}` : ''}${m.local === false ? ' · <i>copying…</i>' : ''}</small></div>
         <div class="acts">
           <button data-a="add" title="Add to “${esc(pl ? pl.name : '')}”">+ Playlist</button>
-          ${m.type === 'web' ? '<button data-a="edit">Edit</button>' : ''}
+          ${m.type === 'web' && mine(m) ? '<button data-a="edit">Edit</button>' : ''}
           <button data-a="only">Show only this</button>
-          <button data-a="del" class="danger">Delete</button>
+          ${mine(m) ? '<button data-a="del" class="danger">Delete</button>' : ''}
         </div>
       </div>`).join('');
   }
@@ -260,7 +293,7 @@
   }
 
   // ---------------------------------------------------------------- display settings
-  const saveSettings = (patch, msg = 'Saved') => act(() => api('PUT', base() + '/api/settings', patch), msg);
+  const saveSettings = (patch, msg = 'Saved') => act(() => api('PUT', cbase() + '/settings', patch), msg);
 
   for (const id of ['mode', 'orientation', 'fit', 'transitionStyle']) {
     $(id).addEventListener('click', (e) => {
@@ -277,7 +310,13 @@
   $('transition').addEventListener('change', (e) => saveSettings({ transition_ms: Number(e.target.value) }));
   $('defaultDuration').addEventListener('change', (e) => saveSettings({ default_duration: Number(e.target.value) }));
   $('background').addEventListener('change', (e) => saveSettings({ background: e.target.value }));
-  $('btnReload').addEventListener('click', () => act(() => api('POST', base() + '/api/reload-display'), 'Screen will refresh in a few seconds'));
+  $('btnReload').addEventListener('click', () => {
+    if (MODE === 'group') {   // refresh every screen in the group
+      const ids = (S.group.members || []).filter((m) => devInfo(m).online);
+      return act(() => Promise.all(ids.map((m) => api('POST', prefix(m) + '/api/reload-display'))), `Refreshing ${ids.length} screen${ids.length === 1 ? '' : 's'}`);
+    }
+    act(() => api('POST', base() + '/api/reload-display'), 'Screen will refresh in a few seconds');
+  });
 
   // ---------------------------------------------------------------- uploads
   function upload(files) {
@@ -287,7 +326,7 @@
     files.forEach((f) => fd.append('files', f));
     if ($('addToPl').checked) fd.append('playlist', playlist().id);
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', base() + '/api/upload');
+    xhr.open('POST', cbase() + '/upload');
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) $('progress').style.width = (100 * e.loaded / e.total) + '%'; };
     xhr.onload = async () => {
       $('progress').style.width = '0';
@@ -316,21 +355,23 @@
     const a = e.target.closest('button')?.dataset.a;
     if (a === 'add') {
       const pl = playlist();
-      act(() => api('PUT', `${base()}/api/playlists/${pl.id}`, { items: [...pl.items, { media: id, duration: S.settings.default_duration }] }), `Added to “${pl.name}”`);
+      act(() => api('PUT', `${cbase()}/playlists/${pl.id}`, { items: [...pl.items, { media: id, duration: S.settings.default_duration }] }), `Added to “${pl.name}”`);
     } else if (a === 'only') {
       saveSettings({ mode: 'single', single_media: id }, `Now showing only “${m.name}”`);
     } else if (a === 'del') {
-      if (confirm(`Delete “${m.name}”? It will be removed from all playlists.`)) act(() => api('DELETE', `${base()}/api/media/${id}`), 'Deleted');
+      if (confirm(`Delete “${m.name}”?\n\nThe library is shared, so this removes it from EVERY sign and group, and from all their playlists.`)) act(() => api('DELETE', `${cbase()}/media/${id}`), 'Deleted');
+    } else if (e.target.closest('.meta') && !(isAdmin() || m.uploader === ME.username)) {
+      return;
     } else if (a === 'edit' || (e.target.closest('.meta') && m.type === 'web')) {
       webDialog(m);
     } else if (e.target.closest('.meta')) {
       const name = prompt('Rename image', m.name);
-      if (name && name.trim()) act(() => api('PATCH', `${base()}/api/media/${id}`, { name: name.trim() }), 'Renamed');
+      if (name && name.trim()) act(() => api('PATCH', `${cbase()}/media/${id}`, { name: name.trim() }), 'Renamed');
     }
   });
 
   // ---------------------------------------------------------------- playlists
-  const savePl = (patch, msg) => act(() => api('PUT', `${base()}/api/playlists/${playlist().id}`, patch), msg);
+  const savePl = (patch, msg) => act(() => api('PUT', `${cbase()}/playlists/${playlist().id}`, patch), msg);
 
   $('plTabs').addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
@@ -338,7 +379,7 @@
   });
   $('plNew').addEventListener('click', () => {
     const name = prompt('Name for the new playlist', 'New playlist'); if (!name) return;
-    act(async () => { const p = await api('POST', base() + '/api/playlists', { name }); curPl = p.id; }, 'Playlist created');
+    act(async () => { const p = await api('POST', cbase() + '/playlists', { name }); curPl = p.id; }, 'Playlist created');
   });
   $('plRename').addEventListener('click', () => {
     const name = prompt('Rename playlist', playlist().name); if (name) savePl({ name }, 'Renamed');
@@ -347,7 +388,7 @@
   $('plDelete').addEventListener('click', () => {
     const pl = playlist();
     if (confirm(`Delete playlist “${pl.name}”? Schedule rules using it are removed too. Images stay in the library.`))
-      act(() => api('DELETE', `${base()}/api/playlists/${pl.id}`), 'Playlist deleted');
+      act(() => api('DELETE', `${cbase()}/playlists/${pl.id}`), 'Playlist deleted');
   });
   $('plShuffle').addEventListener('change', (e) => savePl({ shuffle: e.target.checked }, e.target.checked ? 'Shuffle on' : 'Shuffle off'));
 
@@ -366,10 +407,10 @@
       zoom: Number($('web_zoom').value) || 100, refresh_min: Number($('web_refresh').value) || 0 };
     if (editing) {
       if (!body.name) delete body.name;
-      act(() => api('PATCH', `${base()}/api/media/${m.id}`, body), 'Website updated');
+      act(() => api('PATCH', `${cbase()}/media/${m.id}`, body), 'Website updated');
     } else {
       if ($('web_add').checked) body.playlist = playlist().id;
-      act(() => api('POST', base() + '/api/web', body), 'Website added');
+      act(() => api('POST', cbase() + '/web', body), 'Website added');
     }
   }
   $('btnAddWeb').addEventListener('click', () => webDialog(null));
@@ -423,7 +464,7 @@
   });
   $('ruleSave').addEventListener('click', () => act(async () => {
     for (const r of rules) if (!r.days.length) throw new Error('Each rule needs at least one day');
-    await api('PUT', base() + '/api/schedules', { schedules: rules });
+    await api('PUT', cbase() + '/schedules', { schedules: rules });
     rulesDirty = false;
   }, 'Schedule saved'));
   window.addEventListener('beforeunload', (e) => { if (rulesDirty) { e.preventDefault(); e.returnValue = ''; } });
@@ -449,7 +490,7 @@
 
   // keep the "now showing" line fresh while a sign is open
   setInterval(async () => {
-    if ($('v-device').hidden || !DEV) return;
+    if ($('v-device').hidden || !DEV || MODE === 'group') return;
     try { const s = await api('GET', base() + '/api/summary'); S.server_time = s.server_time;
       $('nowLine').innerHTML = `Now showing: <b>${esc(s.playlist_name)}</b> · ${esc(s.source)} · ${s.count} image${s.count === 1 ? '' : 's'}`; } catch (_) {}
   }, 20000);
@@ -547,6 +588,70 @@
       (failed.length ? ` Failed – ${failed.join('; ')}.` : '') + (offline.length ? ` Offline (not changed): ${offline.map((d) => d.name).join(', ')}.` : '');
     $('allWifiPw').value = '';
   });
+
+  // ================================================================ groups
+  const groupOf = (devId, except) => GROUPS.find((gr) => gr.id !== except && gr.members.includes(devId));
+
+  async function showGroups() {
+    $('v-groups').hidden = false;
+    GROUPS = await api('GET', '/api/groups');
+    $('groupAdd').hidden = !isAdmin();
+    $('groupList').innerHTML = GROUPS.length ? GROUPS.map((gr) => `
+      <div class="item" data-id="${gr.id}">
+        <span class="n" style="white-space:normal;min-width:200px"><b>${esc(gr.name)}</b> ${gr.enabled ? '' : '<span class="pill">off</span>'}<br>
+          <span class="hint">${gr.members.length ? gr.members.map((m) => `<span class="dot ${devInfo(m).online ? 'on' : 'off'}"></span>${esc(devInfo(m).name)}`).join(' &nbsp; ') : 'No signs yet'}</span></span>
+        <button data-a="content" class="primary">Edit content</button>
+        <button data-a="restart" title="Start the slideshow from the first item on every sign, right now">Restart together</button>
+        ${isAdmin() ? `<button data-a="edit">Name &amp; signs</button>
+          <button data-a="toggle">${gr.enabled ? 'Turn off' : 'Turn on'}</button>
+          <button data-a="del" class="danger">Delete</button>` : ''}
+      </div>`).join('')
+      : `<div class="empty">No groups yet.${isAdmin() ? ' Click “+ New group” to make one.' : ''}</div>`;
+  }
+
+  async function groupDialog(gr) {
+    const editing = !!gr;
+    $('grTitle').textContent = editing ? `Edit “${gr.name}”` : 'New group';
+    $('gr_name').value = editing ? gr.name : '';
+    const sel = new Set(editing ? gr.members : []);
+    $('gr_members').innerHTML = NET.devices.map((d) => {
+      const other = groupOf(d.id, editing ? gr.id : null);
+      return `<label title="${other ? esc(`Currently in “${other.name}”`) : ''}"><input type="checkbox" value="${d.id}" ${sel.has(d.id) ? 'checked' : ''}>${esc(d.name)}${other ? ` <small>(${esc(other.name)})</small>` : ''}</label>`;
+    }).join('') || '<span class="hint">No signs yet.</span>';
+    $('gr_moveNote').textContent = GROUPS.length ? 'Ticking a sign that’s in another group moves it into this one.' : '';
+    $('gr_copyWrap').hidden = editing;
+    $('gr_copy').innerHTML = '<option value="">Empty playlists</option>' +
+      NET.devices.filter((d) => d.online).map((d) => `<option value="${d.id}">A copy of ${esc(d.name)}’s playlists &amp; schedule</option>`).join('');
+    if (!(await ask($('dlgGroup')))) return;
+    const body = { name: $('gr_name').value.trim(), members: [...$('gr_members').querySelectorAll('input:checked')].map((i) => i.value) };
+    try {
+      if (editing) { await api('PUT', `/api/groups/${gr.id}`, body); toast('Group saved'); showGroups(); }
+      else {
+        if ($('gr_copy').value) body.copy_from = $('gr_copy').value;
+        const r = await api('POST', '/api/groups', body);
+        toast('Group created – now add its content');
+        location.hash = `#/group/${r.id}`;
+      }
+    } catch (e) { toast(e.message, true); }
+  }
+  $('groupAdd').addEventListener('click', () => groupDialog(null));
+  $('groupList').addEventListener('click', async (e) => {
+    const a = e.target.closest('button')?.dataset.a; if (!a) return;
+    const gr = GROUPS.find((x) => x.id === e.target.closest('.item').dataset.id);
+    try {
+      if (a === 'content') location.hash = `#/group/${gr.id}`;
+      if (a === 'edit') await groupDialog(gr);
+      if (a === 'restart') { await api('POST', `/api/groups/${gr.id}/restart`); toast('Restarting on all signs in the group'); }
+      if (a === 'toggle') {
+        await api('PUT', `/api/groups/${gr.id}`, { enabled: !gr.enabled });
+        toast(gr.enabled ? 'Group off – its signs show their own content' : 'Group on'); showGroups();
+      }
+      if (a === 'del' && confirm(`Delete the group “${gr.name}”?\n\nIts signs go back to their own content. Items in the media library are not deleted.`)) {
+        await api('DELETE', `/api/groups/${gr.id}`); toast('Group deleted'); showGroups();
+      }
+    } catch (err) { toast(err.message, true); }
+  });
+  $('btnRestartGroup').addEventListener('click', () => act(() => api('POST', `/api/groups/${GID}/restart`), 'Restarting on all signs in the group'));
 
   // ================================================================ activity log
   let LOG = [], logOffline = [];

@@ -10,11 +10,13 @@ ConditionPathExists=/dev/tty1
 Type=simple
 User=@USER@
 Environment=SIGNAGE_PORT=@PORT@
+# start even with no keyboard/mouse plugged in (mice are hidden from the sign on purpose)
+Environment=WLR_LIBINPUT_NO_DEVICES=1
 # invisible mouse pointer (theme created by the installer)
 Environment=XCURSOR_THEME=signage-blank
 Environment=XCURSOR_SIZE=24
 Environment=XCURSOR_PATH=@HOME@/.icons:/usr/share/icons
-ExecStart=/usr/bin/cage -d -- /opt/signage/kiosk.sh
+ExecStart=/usr/bin/cage -- /opt/signage/kiosk.sh
 Restart=always
 RestartSec=3
 PAMName=signage-kiosk

@@ -33,6 +33,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 import audit
 import cluster
+import medialib
 import store
 import updates
 
@@ -55,6 +56,10 @@ ORIENTATION_NAMES = {"landscape": "horizontal", "portrait": "vertical",
                      "landscape-flipped": "horizontal (upside-down)", "portrait-flipped": "vertical (other way)"}
 FITS = ("contain", "cover")
 TRANSITIONS = ("fade", "slide", "none")
+PROGRAM_SETTINGS = ("mode", "single_media", "default_duration")   # the parts of "settings" a group shares
+GROUP_PROGRAM = {"settings": {"mode": "playlist", "single_media": None, "default_duration": 10},
+                 "playlists": [{"id": "main", "name": "Main", "items": [], "shuffle": False}],
+                 "default_playlist": "main", "schedules": []}
 ROLES = ("admin", "editor")
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -71,9 +76,7 @@ DEFAULT_CONFIG = {
         "transition_style": "fade",  # fade | slide | none
         "default_duration": 10,
     },
-    # images: {id, type:"image", file, thumb, name, width, height, added}
-    # websites: {id, type:"web", url, name, zoom, refresh_min, added}
-    "media": [],
+    # the media library itself is shared by all signs (medialib.py); playlists refer to it by id
     "playlists": [{"id": "main", "name": "Main", "items": [], "shuffle": False}],  # items: [{media, duration}]
     "default_playlist": "main",
     "schedules": [],                 # first matching enabled rule wins
@@ -230,12 +233,12 @@ def rule_matches(rule, now):
     return (wd in days and t >= start) or (((wd - 1) % 7) in days and t < end)
 
 
-def resolve(cfg, now=None):
-    """Decide what should be on screen right now."""
+def resolve(prog, media=None, now=None):
+    """Decide what a program (a sign's own content, or a group's) should show right now."""
     now = now or dt.datetime.now()
-    s = cfg["settings"]
-    media = {m["id"]: m for m in cfg["media"]}
-    playlists = {p["id"]: p for p in cfg["playlists"]}
+    media = medialib.all_media() if media is None else media
+    s = prog["settings"]
+    playlists = {p["id"]: p for p in prog["playlists"]}
 
     source, pl = None, None
     if s.get("mode") == "single" and s.get("single_media") in media:
@@ -243,13 +246,13 @@ def resolve(cfg, now=None):
         pl = {"id": "__single", "name": media[s["single_media"]]["name"],
               "items": [{"media": s["single_media"], "duration": 0}]}
     else:
-        for rule in cfg["schedules"]:
+        for rule in prog["schedules"]:
             if rule.get("playlist") in playlists and rule_matches(rule, now):
                 source, pl = "Schedule: " + (rule.get("name") or "rule"), playlists[rule["playlist"]]
                 break
         if pl is None:
-            pl = playlists.get(cfg["default_playlist"]) or (cfg["playlists"][0] if cfg["playlists"] else
-                                                            {"id": None, "name": "(none)", "items": []})
+            pl = playlists.get(prog["default_playlist"]) or (prog["playlists"][0] if prog["playlists"] else
+                                                             {"id": None, "name": "(none)", "items": []})
             source = "Default playlist"
 
     items = []
@@ -258,7 +261,7 @@ def resolve(cfg, now=None):
         if not m:
             continue
         item = {"media": m["id"], "name": m["name"],
-                "duration": max(1, float(it.get("duration") or s["default_duration"]))}
+                "duration": max(1, float(it.get("duration") or s.get("default_duration") or 10))}
         if m.get("type") == "web":
             item.update(type="web", url=m["url"], zoom=m.get("zoom", 100), refresh_min=m.get("refresh_min", 0),
                         thumb=None)
@@ -267,7 +270,41 @@ def resolve(cfg, now=None):
                         thumb="/thumbs/" + m["thumb"] if m.get("thumb") else "/media/" + m["file"])
         items.append(item)
     return {"source": source, "playlist_id": pl["id"], "playlist_name": pl["name"], "items": items,
-            "shuffle": bool(pl.get("shuffle"))}
+            "shuffle": bool(pl.get("shuffle")), "sync": None, "group": None}
+
+
+def group_rec(gid):
+    with cluster.lock:
+        r = cluster.state["groups"].get(gid)
+        return copy.deepcopy(r) if r and not r.get("deleted") else None
+
+
+def active_group(dev_id=None):
+    """The enabled group this sign belongs to, if any."""
+    dev_id = dev_id or cluster.node["id"]
+    with cluster.lock:
+        for gid in sorted(cluster.state["groups"]):
+            r = cluster.state["groups"][gid]
+            if not r.get("deleted") and r.get("enabled", True) and dev_id in (r.get("members") or []):
+                return gid, copy.deepcopy(r)
+    return None, None
+
+
+def resolve_group(gid, rec, media=None):
+    n = resolve(rec["program"], media)
+    n["source"] = "Group “%s” · %s" % (rec["name"], n["source"])
+    n["group"] = {"id": gid, "name": rec["name"]}
+    n["sync"] = {"epoch_ms": int(rec.get("epoch", 0) * 1000)}   # every sign in the group runs on one clock
+    return n
+
+
+def sign_now(cfg=None):
+    """What this sign's screen shows: its group's content if it's in an enabled group, else its own."""
+    media = medialib.all_media()
+    gid, rec = active_group()
+    if rec:
+        return resolve_group(gid, rec, media)
+    return resolve(cfg or load_config(), media)
 
 
 # =========================================================================== helpers
@@ -351,16 +388,22 @@ def player_page():
     return send_from_directory(STATIC, "player.html")
 
 
+def _serve_shared(kind, name):
+    if not request.args.get("local") and not os.path.exists(medialib.local_path(kind, name)):
+        medialib.fetch(kind, name)   # not here yet: copy it from another sign right now
+    return send_from_directory(MEDIA if kind == "media" else THUMBS, name)
+
+
 @app.route("/media/<path:name>")
 def media_file(name):
-    resp = send_from_directory(MEDIA, name)
+    resp = _serve_shared("media", name)
     resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"  # filenames are unique
     return resp
 
 
 @app.route("/thumbs/<path:name>")
 def thumb_file(name):
-    resp = send_from_directory(THUMBS, name)
+    resp = _serve_shared("thumbs", name)
     resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     return resp
 
@@ -375,7 +418,7 @@ def healthz():
 @app.route("/api/now")
 def api_now():
     cfg = load_config()
-    now = resolve(cfg)
+    now = sign_now(cfg)
     settings = {k: cfg["settings"][k] for k in ("orientation", "fit", "background", "transition_ms",
                                                  "transition_style")}
     version = hashlib.sha1(json.dumps([settings, now], sort_keys=True).encode()).hexdigest()[:12]
@@ -794,56 +837,163 @@ def api_update_apply():
     return jsonify(ok=True)
 
 
-# =========================================================================== this sign's content (device level)
+# =========================================================================== content targets
+#
+# The same content endpoints work on two kinds of "target":
+#   /api/<path>               this sign's own content   (needs access to this sign)
+#   /api/groups/<gid>/<path>  a group's shared content  (needs access to every sign in the group)
+# Both hold a "program": settings (mode, single item, default duration), playlists, schedule.
 
-@app.route("/api/state")
-@auth("device")
-def api_state():
-    cfg = load_config()
-    out = copy.deepcopy(cfg)
-    out["now"] = resolve(cfg)
+class SignTarget:
+    kind = "sign"
+
+    def __init__(self):
+        self.id = cluster.node["id"]
+        self.name = cluster.my_name()
+
+    def load(self):
+        return load_config()
+
+    def mutate(self, fn):
+        return mutate(fn)
+
+    def label(self, detail):
+        return detail
+
+
+class GroupTarget:
+    kind = "group"
+
+    def __init__(self, gid, rec):
+        self.id, self.rec, self.name = gid, rec, rec["name"]
+
+    def load(self):
+        return copy.deepcopy(self.rec["program"])
+
+    def mutate(self, fn):
+        with cluster.lock:
+            rec = copy.deepcopy(cluster.state["groups"].get(self.id) or {})
+            if not rec or rec.get("deleted"):
+                raise LookupError("This group was deleted")
+            result = fn(rec["program"])
+            rec["epoch"] = time.time()   # content changed: every sign restarts the loop together
+            cluster.set_record("groups", self.id, rec)
+        return result
+
+    def label(self, detail):
+        return "group “%s”: %s" % (self.name, detail)
+
+
+def can_edit_group(u, rec):
+    if u["role"] == "admin":
+        return True
+    members = [m for m in rec.get("members") or [] if cluster.is_member(m)]
+    return bool(members) and all(can_access(u, m) for m in members)
+
+
+def can_modify_media(u, m):
+    return u["role"] == "admin" or m.get("uploader") == u["username"]
+
+
+def content_route(path, methods=("GET",), sign_only=False, level="device"):
+    def deco(fn):
+        def sign_view(**kw):
+            return fn(SignTarget(), **kw)
+        sign_view.__name__ = "sign_" + fn.__name__
+        app.add_url_rule("/api" + path, view_func=auth(level)(sign_view), methods=list(methods))
+        if not sign_only:
+            def group_view(gid, **kw):
+                rec = group_rec(gid)
+                if not rec:
+                    return bad("That group no longer exists", 404)
+                if not can_edit_group(g.user, rec):
+                    return bad("You need access to every sign in this group", 403)
+                try:
+                    return fn(GroupTarget(gid, rec), **kw)
+                except LookupError as e:
+                    return bad(str(e), 404)
+            group_view.__name__ = "group_" + fn.__name__
+            app.add_url_rule("/api/groups/<gid>" + path, view_func=auth("user")(group_view), methods=list(methods))
+        return fn
+    return deco
+
+
+def tlog(t, action, detail=""):
+    log_action(action, t.label(detail))
+
+
+def media_view(m):
+    return dict(m, local=medialib.has_local(m))
+
+
+# =========================================================================== content (sign or group)
+
+@content_route("/state")
+def c_state(t):
+    prog = t.load()
+    media = medialib.all_media()
+    out = {k: copy.deepcopy(prog.get(k)) for k in ("settings", "playlists", "default_playlist", "schedules")}
+    for p in out["playlists"]:
+        p["items"] = [i for i in p["items"] if i.get("media") in media]   # hide deleted items
+    out["media"] = sorted((media_view(m) for m in media.values()), key=lambda m: m.get("added", 0))
     out["server_time"] = server_time()
-    out["device"] = {"id": cluster.node["id"], "name": cluster.my_name(), "ips": ip_addresses(),
-                     "hostname": os.uname().nodename, "port": cluster.port}
+    out["target"] = {"kind": t.kind, "id": t.id, "name": t.name}
+    if t.kind == "sign":
+        out["now"] = sign_now(prog)
+        out["device"] = {"id": cluster.node["id"], "name": cluster.my_name(), "ips": ip_addresses(),
+                         "hostname": os.uname().nodename, "port": cluster.port}
+        gid, rec = active_group()
+        out["group"] = {"id": gid, "name": rec["name"]} if rec else None
+    else:
+        out["now"] = resolve_group(t.id, t.rec, media)
+        out["group"] = {"id": t.id, "name": t.name, "members": t.rec.get("members") or [],
+                        "enabled": t.rec.get("enabled", True)}
     return jsonify(out)
 
 
-@app.route("/api/summary")
-@auth("device")
-def api_summary():
+@content_route("/summary", sign_only=True)
+def c_summary(t):
     cfg = load_config()
-    now = resolve(cfg)
+    now = sign_now(cfg)
     return jsonify({"id": cluster.node["id"], "name": cluster.my_name(), "server_time": server_time(),
                     "orientation": cfg["settings"]["orientation"], "source": now["source"],
                     "playlist_name": now["playlist_name"], "count": len(now["items"]),
                     "thumb": now["items"][0]["thumb"] if now["items"] else None,
                     "first_type": now["items"][0]["type"] if now["items"] else None,
-                    "version": cluster.VERSION,
-                    "media_count": len(cfg["media"])})
+                    "group": now["group"], "version": cluster.VERSION})
 
 
-@app.route("/api/log")
-@auth("device")
-def api_log():
+@content_route("/log", sign_only=True)
+def c_log(t):
     try:
         limit = max(1, min(2000, int(request.args.get("limit", 500))))
     except ValueError:
         limit = 500
-    u = g.user
     entries = audit.read(limit)
-    if u["role"] != "admin":  # editors don't see logins or user-management activity
+    if g.user["role"] != "admin":  # editors don't see logins or user-management activity
         entries = [e for e in entries if e.get("action") not in
                    ("logged in", "login failed", "created user", "updated user", "deleted user")]
     return jsonify(entries)
 
 
-@app.route("/api/upload", methods=["POST"])
-@auth("device")
-def api_upload():
+def _add_to_playlist(t, pid, mids):
+    if not pid or not mids:
+        return None
+
+    def apply(prog):
+        for p in prog["playlists"]:
+            if p["id"] == pid:
+                p["items"].extend({"media": m, "duration": prog["settings"].get("default_duration", 10)}
+                                  for m in mids)
+                return p["name"]
+    return t.mutate(apply)
+
+
+@content_route("/upload", methods=("POST",))
+def c_upload(t):
     files = request.files.getlist("files")
     if not files:
         return bad("No files received")
-    add_to = request.form.get("playlist")
     added, errors = [], []
     os.makedirs(MEDIA, exist_ok=True)
     os.makedirs(THUMBS, exist_ok=True)
@@ -861,21 +1011,16 @@ def api_upload():
         except ValueError as e:
             errors.append("%s: %s" % (name, e))
             continue
-        added.append({"id": mid, "file": os.path.basename(final), "thumb": thumb,
-                      "name": os.path.splitext(name)[0][:80], "width": w, "height": h,
-                      "added": int(time.time())})
-
-    def apply(cfg):
-        cfg["media"].extend(added)
-        for p in cfg["playlists"]:
-            if add_to and p["id"] == add_to:
-                p["items"].extend({"media": m["id"], "duration": cfg["settings"]["default_duration"]}
-                                  for m in added)
-                return p["name"]
-    pl_name = mutate(apply)
+        size, sha = medialib.file_info(final)
+        rec = {"type": "image", "file": os.path.basename(final), "thumb": thumb,
+               "name": os.path.splitext(name)[0][:80], "width": w, "height": h, "size": size, "sha": sha,
+               "added": int(time.time()), "uploader": g.user["username"]}
+        medialib.add(mid, rec)
+        added.append(dict(rec, id=mid))
+    pl_name = _add_to_playlist(t, request.form.get("playlist"), [m["id"] for m in added])
     if added:
-        log_action("uploaded images", ", ".join(m["name"] for m in added) +
-                   (" (added to playlist “%s”)" % pl_name if pl_name else ""))
+        tlog(t, "uploaded images", ", ".join(m["name"] for m in added) +
+             (" (added to playlist “%s”)" % pl_name if pl_name else ""))
     return jsonify({"added": added, "errors": errors})
 
 
@@ -906,117 +1051,95 @@ def _web_fields(body, cur=None):
     return out
 
 
-@app.route("/api/web", methods=["POST"])
-@auth("device")
-def api_web_add():
+@content_route("/web", methods=("POST",))
+def c_web_add(t):
     body = request.get_json(silent=True) or {}
     try:
         fields = _web_fields(body)
     except ValueError as e:
         return bad(str(e))
     name = str(body.get("name") or "").strip()[:80] or re.sub(r"^https?://(www\.)?", "", fields["url"])[:60]
-    item = {"id": uuid.uuid4().hex[:12], "type": "web", "name": name, "added": int(time.time()), **fields}
-
-    def apply(cfg):
-        cfg["media"].append(item)
-        for p in cfg["playlists"]:
-            if body.get("playlist") and p["id"] == body["playlist"]:
-                p["items"].append({"media": item["id"], "duration": cfg["settings"]["default_duration"]})
-                return p["name"]
-    pl_name = mutate(apply)
-    log_action("added website", "%s (%s)%s" % (name, fields["url"],
-                                               " to playlist “%s”" % pl_name if pl_name else ""))
-    return jsonify(item)
+    mid = uuid.uuid4().hex[:12]
+    rec = {"type": "web", "name": name, "added": int(time.time()), "uploader": g.user["username"], **fields}
+    medialib.add(mid, rec)
+    pl_name = _add_to_playlist(t, body.get("playlist"), [mid])
+    tlog(t, "added website", "%s (%s)%s" % (name, fields["url"], " to playlist “%s”" % pl_name if pl_name else ""))
+    return jsonify(dict(rec, id=mid))
 
 
-@app.route("/api/media/<mid>", methods=["PATCH"])
-@auth("device")
-def api_media_edit(mid):
+@content_route("/media/<mid>", methods=("PATCH",))
+def c_media_edit(t, mid):
     body = request.get_json(silent=True) or {}
-
-    def apply(cfg):
-        m = next((m for m in cfg["media"] if m["id"] == mid), None)
-        if not m:
-            return None, []
-        notes = []
-        if "name" in body:
-            name = str(body["name"]).strip()[:80]
-            if not name:
-                raise ValueError("Name required")
-            if name != m["name"]:
-                notes.append("renamed “%s” → “%s”" % (m["name"], name))
-                m["name"] = name
-        if m.get("type") == "web":
-            for k, v in _web_fields(body, cur=m).items():
-                if m.get(k) != v:
-                    notes.append("%s: %s → %s" % ({"url": "address", "zoom": "zoom %",
-                                                   "refresh_min": "refresh minutes"}[k], m.get(k), v))
-                    m[k] = v
-        return m, notes
-    try:
-        m, notes = mutate(apply)
-    except ValueError as e:
-        return bad(str(e))
-    if m is None:
-        return bad("Not found", 404)
-    if notes:
-        log_action("edited " + ("website" if m.get("type") == "web" else "image"),
-                   "%s: %s" % (m["name"], "; ".join(notes)))
-    return jsonify(m)
-
-
-@app.route("/api/media/<mid>", methods=["DELETE"])
-@auth("device")
-def api_media_delete(mid):
-    def apply(cfg):
-        m = next((m for m in cfg["media"] if m["id"] == mid), None)
-        if not m:
-            return None
-        cfg["media"].remove(m)
-        for p in cfg["playlists"]:
-            p["items"] = [i for i in p["items"] if i["media"] != mid]
-        if cfg["settings"].get("single_media") == mid:
-            cfg["settings"]["single_media"] = None
-            cfg["settings"]["mode"] = "playlist"
-        return m
-    m = mutate(apply)
+    m = medialib.get(mid)
     if not m:
         return bad("Not found", 404)
-    for path in (os.path.join(MEDIA, m.get("file") or ""), os.path.join(THUMBS, m.get("thumb") or "")):
-        if os.path.isfile(path):
-            os.remove(path)
-    log_action("deleted " + ("website" if m.get("type") == "web" else "image"), m["name"])
+    if not can_modify_media(g.user, m):
+        return bad("Only an admin or the person who added it can change this item", 403)
+    changes, notes = {}, []
+    if "name" in body:
+        name = str(body["name"]).strip()[:80]
+        if not name:
+            return bad("Name required")
+        if name != m["name"]:
+            changes["name"] = name
+            notes.append("renamed “%s” → “%s”" % (m["name"], name))
+    if m.get("type") == "web":
+        try:
+            for k, v in _web_fields(body, cur=m).items():
+                if m.get(k) != v:
+                    changes[k] = v
+                    notes.append("%s: %s → %s" % ({"url": "address", "zoom": "zoom %",
+                                                   "refresh_min": "refresh minutes"}[k], m.get(k), v))
+        except ValueError as e:
+            return bad(str(e))
+    if changes:
+        medialib.update(mid, **changes)
+        log_action("edited " + ("website" if m.get("type") == "web" else "image"),
+                   "%s: %s" % (changes.get("name", m["name"]), "; ".join(notes)))
+    return jsonify(media_view(dict(m, **changes)))
+
+
+@content_route("/media/<mid>", methods=("DELETE",))
+def c_media_delete(t, mid):
+    m = medialib.get(mid)
+    if not m:
+        return bad("Not found", 404)
+    if not can_modify_media(g.user, m):
+        return bad("Only an admin or the person who added it can delete this item", 403)
+    medialib.delete(mid)
+    log_action("deleted " + ("website" if m.get("type") == "web" else "image"),
+               "%s (removed from every sign)" % m["name"])
     return jsonify({"ok": True})
 
 
-@app.route("/api/settings", methods=["PUT"])
-@auth("device")
-def api_settings():
+@content_route("/settings", methods=("PUT",))
+def c_settings(t):
     body = request.get_json(silent=True) or {}
+    if t.kind == "group":   # a group shares content; screen settings stay with each sign
+        body = {k: v for k, v in body.items() if k in PROGRAM_SETTINGS}
+    names = {k: m["name"] for k, m in medialib.all_media().items()}
 
-    def apply(cfg):
-        s = cfg["settings"]
+    def apply(prog):
+        s = prog["settings"]
         before = dict(s)
         if body.get("mode") in ("playlist", "single"):
             s["mode"] = body["mode"]
         if "single_media" in body:
-            ids = {m["id"] for m in cfg["media"]}
-            s["single_media"] = body["single_media"] if body["single_media"] in ids else None
+            s["single_media"] = body["single_media"] if body["single_media"] in names else None
         if body.get("orientation") in ORIENTATIONS:
             s["orientation"] = body["orientation"]
         if body.get("fit") in FITS:
             s["fit"] = body["fit"]
         if "background" in body:
-            s["background"] = clean_hex(body["background"], s["background"])
+            s["background"] = clean_hex(body["background"], s.get("background", "#000000"))
         if body.get("transition_style") in TRANSITIONS:
             s["transition_style"] = body["transition_style"]
         if "transition_ms" in body:
             s["transition_ms"] = max(0, min(5000, int(body["transition_ms"])))
         if "default_duration" in body:
             s["default_duration"] = max(1, min(86400, float(body["default_duration"])))
-        if s["mode"] == "single" and not s["single_media"]:
+        if s.get("mode") == "single" and not s.get("single_media"):
             s["mode"] = "playlist"
-        names = {m["id"]: m["name"] for m in cfg["media"]}
         notes = []
         for k in s:
             if s[k] != before.get(k):
@@ -1029,15 +1152,15 @@ def api_settings():
                                  else "back to slideshow/schedule")
                 else:
                     notes.append("%s: %s → %s" % (k.replace("_", " "), before.get(k), s[k]))
-        if s["mode"] == "single" and before.get("mode") == "single" and s["single_media"] != before.get("single_media"):
+        if s.get("mode") == "single" and before.get("mode") == "single" and s["single_media"] != before.get("single_media"):
             notes.append("showing one item: %s" % names.get(s["single_media"], "?"))
-        return s, notes
+        return dict(s), notes
     try:
-        s, notes = mutate(apply)
+        s, notes = t.mutate(apply)
     except (TypeError, ValueError):
         return bad("Invalid value")
     if notes:
-        log_action("changed display settings", "; ".join(notes))
+        tlog(t, "changed display settings", "; ".join(notes))
     return jsonify(s)
 
 
@@ -1072,23 +1195,22 @@ def _describe_items(old, new, names):
     return notes
 
 
-@app.route("/api/playlists", methods=["POST"])
-@auth("device")
-def api_playlist_create():
+@content_route("/playlists", methods=("POST",))
+def c_playlist_create(t):
     name = str((request.get_json(silent=True) or {}).get("name") or "New playlist").strip()[:60]
     pl = {"id": uuid.uuid4().hex[:8], "name": name, "items": [], "shuffle": False}
-    mutate(lambda cfg: cfg["playlists"].append(pl))
-    log_action("created playlist", name)
+    t.mutate(lambda prog: prog["playlists"].append(pl))
+    tlog(t, "created playlist", name)
     return jsonify(pl)
 
 
-@app.route("/api/playlists/<pid>", methods=["PUT"])
-@auth("device")
-def api_playlist_update(pid):
+@content_route("/playlists/<pid>", methods=("PUT",))
+def c_playlist_update(t, pid):
     body = request.get_json(silent=True) or {}
+    names = {k: m["name"] for k, m in medialib.all_media().items()}
 
-    def apply(cfg):
-        pl = next((p for p in cfg["playlists"] if p["id"] == pid), None)
+    def apply(prog):
+        pl = next((p for p in prog["playlists"] if p["id"] == pid), None)
         if not pl:
             return None, []
         notes = []
@@ -1096,54 +1218,52 @@ def api_playlist_update(pid):
             notes.append("renamed from “%s”" % pl["name"])
             pl["name"] = str(body["name"]).strip()[:60]
         if "items" in body:
-            new = _clean_items(body["items"], {m["id"] for m in cfg["media"]}, cfg["settings"]["default_duration"])
-            notes += _describe_items(pl["items"], new, {m["id"]: m["name"] for m in cfg["media"]})
+            new = _clean_items(body["items"], set(names), prog["settings"].get("default_duration", 10))
+            notes += _describe_items([i for i in pl["items"] if i["media"] in names], new, names)
             pl["items"] = new
         if "shuffle" in body and bool(body["shuffle"]) != bool(pl.get("shuffle")):
             pl["shuffle"] = bool(body["shuffle"])
             notes.append("shuffle " + ("on" if pl["shuffle"] else "off"))
-        if body.get("make_default") and cfg["default_playlist"] != pid:
-            cfg["default_playlist"] = pid
+        if body.get("make_default") and prog["default_playlist"] != pid:
+            prog["default_playlist"] = pid
             notes.append("made default")
-        return pl, notes
-    pl, notes = mutate(apply)
+        return copy.deepcopy(pl), notes
+    pl, notes = t.mutate(apply)
     if not pl:
         return bad("Not found", 404)
     if notes:
-        log_action("edited playlist", "“%s”: %s" % (pl["name"], "; ".join(notes)))
+        tlog(t, "edited playlist", "“%s”: %s" % (pl["name"], "; ".join(notes)))
     return jsonify(pl)
 
 
-@app.route("/api/playlists/<pid>", methods=["DELETE"])
-@auth("device")
-def api_playlist_delete(pid):
-    def apply(cfg):
-        if len(cfg["playlists"]) <= 1:
+@content_route("/playlists/<pid>", methods=("DELETE",))
+def c_playlist_delete(t, pid):
+    def apply(prog):
+        if len(prog["playlists"]) <= 1:
             return "You need at least one playlist", None
-        pl = next((p for p in cfg["playlists"] if p["id"] == pid), None)
+        pl = next((p for p in prog["playlists"] if p["id"] == pid), None)
         if not pl:
             return "Not found", None
-        cfg["playlists"].remove(pl)
-        cfg["schedules"] = [r for r in cfg["schedules"] if r.get("playlist") != pid]
-        if cfg["default_playlist"] == pid:
-            cfg["default_playlist"] = cfg["playlists"][0]["id"]
+        prog["playlists"].remove(pl)
+        prog["schedules"] = [r for r in prog["schedules"] if r.get("playlist") != pid]
+        if prog["default_playlist"] == pid:
+            prog["default_playlist"] = prog["playlists"][0]["id"]
         return None, pl["name"]
-    err, name = mutate(apply)
+    err, name = t.mutate(apply)
     if err:
         return bad(err)
-    log_action("deleted playlist", name)
+    tlog(t, "deleted playlist", name)
     return jsonify({"ok": True})
 
 
-@app.route("/api/schedules", methods=["PUT"])
-@auth("device")
-def api_schedules():
+@content_route("/schedules", methods=("PUT",))
+def c_schedules(t):
     rules = (request.get_json(silent=True) or {}).get("schedules")
     if not isinstance(rules, list):
         return bad("Expected a list of rules")
 
-    def apply(cfg):
-        pids = {p["id"]: p["name"] for p in cfg["playlists"]}
+    def apply(prog):
+        pids = {p["id"]: p["name"] for p in prog["playlists"]}
         clean = []
         for r in rules:
             if not isinstance(r, dict) or r.get("playlist") not in pids:
@@ -1160,22 +1280,21 @@ def api_schedules():
                           "name": str(r.get("name") or "").strip()[:60],
                           "playlist": r["playlist"], "days": days, "start": start, "end": end,
                           "start_date": sd, "end_date": ed, "enabled": bool(r.get("enabled", True))})
-        cfg["schedules"] = clean
+        prog["schedules"] = clean
         dn = "MTWTFSS"
         return clean, ["%s%s: %s %s %s–%s" % ("" if c["enabled"] else "(off) ", c["name"] or "rule",
                                                 pids[c["playlist"]], "".join(dn[d] for d in c["days"]),
                                                 c["start"], c["end"]) for c in clean]
     try:
-        clean, desc = mutate(apply)
+        clean, desc = t.mutate(apply)
     except ValueError as e:
         return bad(str(e))
-    log_action("saved schedule", "; ".join(desc) if desc else "no rules")
+    tlog(t, "saved schedule", "; ".join(desc) if desc else "no rules")
     return jsonify(clean)
 
 
-@app.route("/api/reload-display", methods=["POST"])
-@auth("device")
-def api_reload_display():
+@content_route("/reload-display", methods=("POST",), sign_only=True)
+def c_reload_display(t):
     def apply(cfg):
         cfg["reload_token"] = cfg.get("reload_token", 0) + 1
     mutate(apply)
@@ -1183,14 +1302,144 @@ def api_reload_display():
     return jsonify({"ok": True})
 
 
-@app.route("/api/reboot", methods=["POST"])
-@auth("admin")
-def api_reboot():
+@content_route("/reboot", methods=("POST",), sign_only=True, level="admin")
+def c_reboot(t):
     log_action("rebooted sign")
     try:
         subprocess.Popen(["sudo", "-n", "/sbin/reboot"])
     except Exception as e:
         return bad("Reboot failed: %s" % e, 500)
+    return jsonify({"ok": True})
+
+
+# =========================================================================== groups (shared by all signs)
+
+def _group_view(gid, rec):
+    prog = rec["program"]
+    return {"id": gid, "name": rec["name"], "members": [m for m in rec.get("members") or [] if cluster.is_member(m)],
+            "enabled": rec.get("enabled", True), "playlists": len(prog["playlists"]),
+            "schedules": len(prog["schedules"]), "updated": rec.get("updated")}
+
+
+def _claim_members(gid, members):
+    """A sign can be in one group at a time: take these signs out of any other group."""
+    with cluster.lock:
+        others = [(k, copy.deepcopy(v)) for k, v in cluster.state["groups"].items()
+                  if k != gid and not v.get("deleted") and set(v.get("members") or []) & set(members)]
+    for k, v in others:
+        v["members"] = [m for m in v["members"] if m not in members]
+        cluster.set_record("groups", k, v)
+
+
+def _clean_members(members):
+    return sorted({m for m in (members or []) if isinstance(m, str) and cluster.is_member(m)})
+
+
+@app.route("/api/groups")
+@auth("user")
+def api_groups():
+    with cluster.lock:
+        recs = [(k, copy.deepcopy(v)) for k, v in cluster.state["groups"].items() if not v.get("deleted")]
+    out = [dict(_group_view(k, v), can_edit=can_edit_group(g.user, v)) for k, v in recs]
+    if g.user["role"] != "admin":
+        out = [x for x in out if x["can_edit"]]
+    return jsonify(sorted(out, key=lambda x: x["name"].lower()))
+
+
+def _program_from_sign(dev_id):
+    """Copy a sign's own playlists/schedule/single-item setting to start a group with."""
+    if dev_id == cluster.node["id"]:
+        cfg = load_config()
+    else:
+        status, _, data = cluster.call_peer(dev_id, "GET", "/api/state", user=g.user["username"],
+                                            client_ip=request.remote_addr, timeout=15)
+        if status != 200:
+            raise ValueError("Couldn't read that sign's content")
+        cfg = json.loads(data)
+    prog = copy.deepcopy(GROUP_PROGRAM)
+    prog["settings"].update({k: cfg["settings"].get(k) for k in PROGRAM_SETTINGS if k in cfg["settings"]})
+    prog["playlists"] = cfg["playlists"]
+    prog["default_playlist"] = cfg["default_playlist"]
+    prog["schedules"] = cfg["schedules"]
+    return prog
+
+
+@app.route("/api/groups", methods=["POST"])
+@auth("admin")
+def api_group_create():
+    b = request.get_json(silent=True) or {}
+    name = str(b.get("name") or "").strip()[:40]
+    if not name:
+        return bad("Give the group a name")
+    members = _clean_members(b.get("members"))
+    prog = copy.deepcopy(GROUP_PROGRAM)
+    if b.get("copy_from"):
+        try:
+            prog = _program_from_sign(str(b["copy_from"]))
+        except (OSError, ValueError, KeyError) as e:
+            return bad(str(e) or "Couldn't copy that sign's content")
+    gid = uuid.uuid4().hex[:10]
+    _claim_members(gid, members)
+    cluster.set_record("groups", gid, {"name": name, "members": members, "enabled": True, "deleted": False,
+                                       "epoch": time.time(), "program": prog})
+    log_action("created group", "%s (%s)" % (name, ", ".join(cluster.device_name(m) for m in members) or "no signs"))
+    return jsonify({"id": gid})
+
+
+@app.route("/api/groups/<gid>", methods=["PUT"])
+@auth("admin")
+def api_group_update(gid):
+    rec = group_rec(gid)
+    if not rec:
+        return bad("No such group", 404)
+    b = request.get_json(silent=True) or {}
+    notes = []
+    if "name" in b and str(b["name"]).strip() and str(b["name"]).strip()[:40] != rec["name"]:
+        notes.append("renamed from “%s”" % rec["name"])
+        rec["name"] = str(b["name"]).strip()[:40]
+    if "members" in b:
+        members = _clean_members(b["members"])
+        old = set(rec.get("members") or [])
+        if set(members) != old:
+            added = [cluster.device_name(m) for m in members if m not in old]
+            removed = [cluster.device_name(m) for m in old if m not in members]
+            notes += (["added " + ", ".join(added)] if added else []) + (["removed " + ", ".join(removed)] if removed else [])
+            _claim_members(gid, members)
+            rec["members"] = members
+            rec["epoch"] = time.time()
+    if "enabled" in b and bool(b["enabled"]) != rec.get("enabled", True):
+        rec["enabled"] = bool(b["enabled"])
+        rec["epoch"] = time.time()
+        notes.append("turned " + ("on" if rec["enabled"] else "off (signs show their own content)"))
+    if notes:
+        cluster.set_record("groups", gid, rec)
+        log_action("edited group", "%s: %s" % (rec["name"], "; ".join(notes)))
+    return jsonify(_group_view(gid, rec))
+
+
+@app.route("/api/groups/<gid>", methods=["DELETE"])
+@auth("admin")
+def api_group_delete(gid):
+    rec = group_rec(gid)
+    if not rec:
+        return bad("No such group", 404)
+    cluster.set_record("groups", gid, {"deleted": True, "name": rec["name"], "members": [], "program": GROUP_PROGRAM})
+    log_action("deleted group", "%s (its signs went back to their own content)" % rec["name"])
+    return jsonify({"ok": True})
+
+
+@app.route("/api/groups/<gid>/restart", methods=["POST"])
+@auth("user")
+def api_group_restart(gid):
+    """Start the group's slideshow from the first item on every sign, right now."""
+    rec = group_rec(gid)
+    if not rec:
+        return bad("No such group", 404)
+    if not can_edit_group(g.user, rec):
+        return bad("You need access to every sign in this group", 403)
+    rec["epoch"] = time.time()
+    cluster.set_record("groups", gid, rec)
+    log_action("restarted group slideshow", rec["name"])
     return jsonify({"ok": True})
 
 
@@ -1201,6 +1450,9 @@ def migrate_and_bootstrap():
     cfg = store.read_json(CONFIG)
     old_hash = cfg.pop("admin_password_hash", None) if cfg else None
     if cfg is not None and old_hash is not None:
+        save_config(cfg)
+    cfg = load_config()
+    if medialib.migrate_from_config(cfg):   # v3.0 -> 3.1: per-sign media becomes the shared library
         save_config(cfg)
     with cluster.lock:
         has_users = any(not u.get("deleted") for u in cluster.state["users"].values())
@@ -1279,6 +1531,7 @@ def main():
     app.secret_key = cluster.node["session_secret"]
     cluster.start()
     updates.start()
+    medialib.start()
 
     try:
         from waitress import serve

@@ -26,7 +26,9 @@ import uuid
 
 import store
 
-VERSION = "3.0"
+VERSION = "3.1.1"
+# kinds of shared records: users, member signs, the shared media library, sign groups
+KINDS = ("users", "devices", "media", "groups")
 DISCOVERY_PORT = int(os.environ.get("SIGNAGE_DISCOVERY_PORT", "47474"))
 # extra ports to announce to (only useful when testing several nodes on one machine)
 SEND_PORTS = [int(p) for p in os.environ.get("SIGNAGE_DISCOVERY_SEND_PORTS", str(DISCOVERY_PORT)).split(",") if p]
@@ -43,6 +45,7 @@ port = 80
 peers = {}       # verified members heard recently: id -> {ip, port, name, last_seen, digest}
 foreign = {}     # Pis on the LAN that are not in our network: id -> {...}
 _last_sync = {}
+changed_event = threading.Event()   # set whenever shared state changes (wakes the media copier)
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # LAN only, never via a proxy
 
 
@@ -80,8 +83,8 @@ def init(http_port):
             save_node()
         node.setdefault("manual_ips", [])
         state = store.read_json(_state_path()) or {}
-        state.setdefault("users", {})
-        state.setdefault("devices", {})
+        for kind in KINDS:
+            state.setdefault(kind, {})
         me = state["devices"].get(node["id"])
         if not me or me.get("removed"):
             set_record("devices", node["id"], {"name": socket.gethostname(), "ip": primary_ip(),
@@ -95,7 +98,7 @@ def init(http_port):
 def next_ts():
     """A timestamp newer than every record we hold, even if this Pi's clock is behind."""
     hi = 0.0
-    for kind in ("users", "devices"):
+    for kind in KINDS:
         for rec in state[kind].values():
             hi = max(hi, rec.get("updated", 0))
     return round(max(time.time(), hi + 0.001), 3)
@@ -108,6 +111,7 @@ def set_record(kind, key, rec, push=True):
         rec["by"] = node["id"]
         state[kind][key] = rec
         save_state()
+    changed_event.set()
     if push:
         push_async()
     return rec
@@ -134,7 +138,7 @@ def merge(remote):
     """Take every record from `remote` that is newer than ours. Returns True if anything changed."""
     changed = False
     with lock:
-        for kind in ("users", "devices"):
+        for kind in KINDS:
             for key, rec in ((remote or {}).get(kind) or {}).items():
                 if not isinstance(rec, dict) or not isinstance(rec.get("updated"), (int, float)):
                     continue
@@ -144,6 +148,7 @@ def merge(remote):
                     changed = True
         if changed:
             save_state()
+            changed_event.set()
         me = state["devices"].get(node["id"])
     if me and me.get("removed"):
         leave_network()
@@ -206,6 +211,7 @@ def leave_network():
         _new_network(node)
         save_node()
         state["devices"] = {}
+        state["groups"] = {}          # groups belong to the old network; the media library is kept
         peers.clear()
         set_record("devices", node["id"], {"name": name, "ip": primary_ip(), "port": port, "removed": False},
                    push=False)
@@ -222,6 +228,12 @@ def accept_join(payload):
         remote = payload.get("state") or {}
         state["users"] = dict(remote.get("users") or {})
         state["devices"] = dict(remote.get("devices") or {})
+        state["groups"] = dict(remote.get("groups") or {})
+        # media: keep ours (so this sign's content keeps playing and is shared) and add the network's
+        for mid, rec in (remote.get("media") or {}).items():
+            cur = state["media"].get(mid)
+            if cur is None or (rec.get("updated", 0), rec.get("by", "")) > (cur.get("updated", 0), cur.get("by", "")):
+                state["media"][mid] = rec
         peers.clear()
         foreign.clear()
         set_record("devices", node["id"], {"name": name, "ip": primary_ip(), "port": port, "removed": False},

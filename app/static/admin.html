@@ -15,6 +15,10 @@
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
+  .group-mode .sign-only { display: none !important; }
+  #v-device:not(.group-mode) .group-only { display: none !important; }
+  .notice { background: var(--accent-soft); border: 1px solid var(--accent); border-radius: var(--radius); padding: 12px 16px;
+            display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 14px; }
   body { margin: 0; font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
   header { position: sticky; top: 0; z-index: 5; background: var(--card); border-bottom: 1px solid var(--line);
            padding: 10px 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; }
@@ -113,6 +117,7 @@
   <h1>JoeDeck</h1>
   <nav>
     <a href="#/signs" data-view="signs">Signs</a>
+    <a href="#/groups" data-view="groups">Groups</a>
     <a href="#/activity" data-view="activity">Activity</a>
     <a href="#/users" data-view="users" data-admin hidden>Users</a>
     <a href="#/network" data-view="network" data-admin hidden>Network</a>
@@ -137,14 +142,18 @@
   <div class="view" id="v-device" hidden>
     <section>
       <div class="crumb">
-        <a class="btn" href="#/signs">← All signs</a>
+        <a class="btn" href="#/signs" id="btnBack">← All signs</a>
         <h2 id="devName"></h2>
         <span id="devStatus" class="hint" style="margin:0"></span>
         <span class="spacer"></span>
         <button id="btnReload" title="Make the screen reload the player page">Refresh screen</button>
-        <a class="btn" id="btnPreview" target="_blank">Preview</a>
+        <button id="btnRestartGroup" class="group-only" title="Start the slideshow from the first item on every sign in the group, right now">Restart together</button>
+        <a class="btn sign-only" id="btnPreview" target="_blank">Preview</a>
       </div>
       <p class="hint" id="nowLine" style="margin:10px 0 0"></p>
+      <div class="notice" id="groupNotice" hidden style="margin-top:12px"><span id="groupNoticeText" style="flex:1;min-width:220px"></span>
+        <a class="btn" id="groupNoticeLink">Edit group content</a></div>
+      <p class="hint group-only" style="margin:10px 0 0">Everything here is shared by all signs in the group, which change items at the same moment. Screen settings (orientation, image fit, transitions) stay with each sign.</p>
     </section>
 
     <section>
@@ -157,7 +166,7 @@
         </div>
         <select id="singleMedia"></select>
       </div>
-      <div class="row"><span class="lbl">Orientation</span>
+      <div class="row sign-only"><span class="lbl">Orientation</span>
         <div class="seg" id="orientation">
           <button data-v="landscape"><span class="screen l up"></span>Horizontal</button>
           <button data-v="portrait"><span class="screen p up"></span>Vertical</button>
@@ -165,13 +174,13 @@
           <button data-v="portrait-flipped"><span class="screen p down"></span>Vertical (other way)</button>
         </div>
       </div>
-      <div class="row"><span class="lbl">Image fit</span>
+      <div class="row sign-only"><span class="lbl">Image fit</span>
         <div class="seg" id="fit">
           <button data-v="contain">Fit whole image</button>
           <button data-v="cover">Fill screen (crop edges)</button>
         </div>
       </div>
-      <div class="row"><span class="lbl">Transition</span>
+      <div class="row sign-only"><span class="lbl">Transition</span>
         <div class="seg" id="transitionStyle">
           <button data-v="fade">Fade</button>
           <button data-v="slide">Slide</button>
@@ -180,7 +189,7 @@
         <label>speed <input type="number" id="transition" min="0" max="5000" step="100"> ms</label>
       </div>
       <div class="row"><span class="lbl">Other</span>
-        <span class="lbl" style="width:auto">Background</span><input type="color" id="background">
+        <span class="lbl sign-only" style="width:auto">Background</span><input type="color" id="background" class="sign-only">
         <span class="lbl" style="width:auto">Default duration</span>
         <label><input type="number" id="defaultDuration" min="1" step="1"> s</label>
       </div>
@@ -188,7 +197,7 @@
 
     <section>
       <h2>Media library</h2>
-      <p class="hint">Images (JPG, PNG, GIF, WebP – large photos are resized and turned upright automatically) and websites (menus, schedules, dashboards, calendars…).</p>
+      <p class="hint"><b>Shared by all your signs:</b> anything added here can be used on any sign or group. Images (JPG, PNG, GIF, WebP – large photos are resized and turned upright automatically) and websites (menus, schedules, dashboards, calendars…).</p>
       <div id="drop">
         Drag images here, or <button id="btnPick" class="primary">Choose files…</button> <button id="btnAddWeb">+ Add website</button>
         <label style="margin-left:12px"><input type="checkbox" id="addToPl" checked> also add to playlist “<span id="addToPlName"></span>”</label>
@@ -229,7 +238,7 @@
       </div>
     </section>
 
-    <section data-admin hidden id="wifiSection">
+    <section data-admin hidden id="wifiSection" class="sign-only">
       <div class="row" style="margin:0 0 4px"><h2 style="margin:0">Wi-Fi</h2><span class="spacer"></span><button id="wifiRefresh">Refresh</button></div>
       <p class="hint" id="wifiStatus">Loading…</p>
       <div class="items" id="wifiSaved"></div>
@@ -246,7 +255,7 @@
       <p class="hint" style="margin:0">Saved networks are used automatically when in range. “Switch now” goes back to the current network if the new one fails. If it works, the sign may get a new address on that network.</p>
     </section>
 
-    <section>
+    <section class="sign-only">
       <h2>This sign</h2>
       <div class="row"><span class="lbl">Device</span><span id="devInfo" class="hint" style="margin:0"></span></div>
       <div class="row" data-admin hidden>
@@ -256,6 +265,15 @@
         <button id="btnReboot" class="danger">Reboot</button>
         <button id="btnRemoveSign" class="danger">Remove from network</button>
       </div>
+    </section>
+  </div>
+
+  <!-- ======================================================= groups -->
+  <div class="view" id="v-groups" hidden>
+    <section>
+      <div class="row" style="margin:0 0 4px"><h2 style="margin:0">Groups</h2><span class="spacer"></span><button id="groupAdd" class="primary" hidden>+ New group</button></div>
+      <p class="hint">A group makes several signs show the same content and change items at the same moment, for example every concourse TV showing the same promo loop. A sign can be in one group at a time. Turn a group off, or take a sign out of it, and the sign goes back to its own content.</p>
+      <div class="items" id="groupList"></div>
     </section>
   </div>
 
@@ -345,6 +363,16 @@
   <label>Username <input id="ad_user" value="admin" autocapitalize="none"></label>
   <label>Password <input id="ad_pw" type="password" autocomplete="off"></label>
   <div class="btns"><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Add sign</button></div>
+</form></dialog>
+
+<dialog id="dlgGroup"><form method="dialog">
+  <h3 id="grTitle">New group</h3>
+  <label>Name <input id="gr_name" placeholder="e.g. Concourse, Lobby screens, All signs"></label>
+  <div><div class="hint" style="margin:0 0 6px">Signs in this group</div><div class="row chips" id="gr_members" style="margin:0"></div>
+    <p class="hint" id="gr_moveNote" style="margin:6px 0 0"></p></div>
+  <label id="gr_copyWrap">Start with
+    <select id="gr_copy"><option value="">Empty playlists</option></select></label>
+  <div class="btns"><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Save</button></div>
 </form></dialog>
 
 <dialog id="dlgWeb"><form method="dialog">

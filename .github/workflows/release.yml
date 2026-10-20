@@ -1,0 +1,26 @@
+# When a release is published on GitHub (from the website or tools/release.sh),
+# build the download files and attach them to it. The signs download
+# joedeck-install.sh from the latest release when you click "Update".
+name: Build release downloads
+on:
+  release:
+    types: [published]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make sure the app version matches the release tag
+        run: |
+          V=$(python3 -c "import re;print(re.search(r'VERSION = \"([^\"]+)\"', open('app/cluster.py').read()).group(1))")
+          if [ "v$V" != "$GITHUB_REF_NAME" ] && [ "$V" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Release tag $GITHUB_REF_NAME doesn't match VERSION = \"$V\" in app/cluster.py"; exit 1
+          fi
+      - name: Build
+        run: tools/build-release.sh
+      - name: Attach files to the release
+        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
